@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Volume2, VolumeX, Pause, Play, RotateCcw, Film, FastForward, ArrowLeft, Trophy } from 'lucide-react';
+import { Volume2, VolumeX, Pause, Play, RotateCcw, Film, FastForward, ArrowLeft, Trophy, Shuffle } from 'lucide-react';
 import {
   AIR_DRAG,
   BLAST_ZONE,
@@ -17,8 +17,13 @@ import {
 } from './game/constants';
 import { soundSynth } from './game/audio';
 import { renderGameFrame, renderWinnersPodiumStage } from './game/renderer';
+import { AccountBar } from './components/AccountBar';
+import { AuthModal } from './components/AuthModal';
 import { PersistentScoreboard } from './components/PersistentScoreboard';
+import { ProfileModal } from './components/ProfileModal';
+import { useFirebase } from './contexts/FirebaseContext';
 import { usePersistentScoreboard } from './hooks/usePersistentScoreboard';
+import { ALL_MAP_IDS, type MapSelection } from './types/account';
 import type {
   AnimState,
   DestructiblePropRuntime,
@@ -368,12 +373,39 @@ export default function App() {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const [selectedMode, setSelectedMode] = useState<PlayMode>('1P_AI');
-  const [selectedMap, setSelectedMap] = useState<MapId>('hive_canopy');
+  const [selectedMap, setSelectedMap] = useState<MapSelection>('hive_canopy');
   const [p1Fighter, setP1Fighter] = useState<FighterId>('honey_shell');
   const [p2Fighter, setP2Fighter] = useState<FighterId>('spidra');
   const [muted, setMuted] = useState(false);
 
-  const { scoreboard, recordMatchResult, resetScoreboard } = usePersistentScoreboard();
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authModalMode, setAuthModalMode] = useState<'signin' | 'signup' | 'upgrade'>('signin');
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
+
+  const modalOpenRef = useRef(false);
+  modalOpenRef.current = authModalOpen || profileModalOpen;
+
+  const { user, profile, saveCloudScoreboard } = useFirebase();
+  const hydratedUidRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!user) {
+      hydratedUidRef.current = null;
+      return;
+    }
+    if (profile && hydratedUidRef.current !== user.uid) {
+      hydratedUidRef.current = user.uid;
+      setP1Fighter(profile.favoriteFighter);
+      setSelectedMap(profile.defaultMap);
+      setSelectedMode(profile.preferredMode);
+    }
+  }, [profile, user]);
+
+  const { scoreboard, recordMatchResult, resetScoreboard } = usePersistentScoreboard({
+    cloudScoreboard: profile?.scoreboard,
+    isCloudAuthenticated: Boolean(user),
+    onSaveCloudScoreboard: saveCloudScoreboard,
+  });
   const recordMatchResultRef = useRef(recordMatchResult);
   recordMatchResultRef.current = recordMatchResult;
   const matchRecordedRef = useRef<boolean>(false);
@@ -471,13 +503,21 @@ export default function App() {
     []
   );
 
+  const resolveMapId = useCallback((selection: MapSelection): MapId => {
+    if (selection === 'random') {
+      return ALL_MAP_IDS[Math.floor(Math.random() * ALL_MAP_IDS.length)];
+    }
+    return selection;
+  }, []);
+
   const startMatch = useCallback(() => {
     soundSynth.playUiClick();
     matchRecordedRef.current = false;
+    const matchMapId = resolveMapId(selectedMap);
     const next = createInitialEngineState(
       'PLAYING',
       selectedMode,
-      selectedMap,
+      matchMapId,
       p1Fighter,
       p2Fighter
     );
@@ -492,7 +532,7 @@ export default function App() {
     setReplayDurationSec(0);
     justPressedRef.current.clear();
     syncHudImmediate();
-  }, [p1Fighter, p2Fighter, selectedMap, selectedMode, syncHudImmediate]);
+  }, [p1Fighter, p2Fighter, resolveMapId, selectedMap, selectedMode, syncHudImmediate]);
 
   const rematchMatch = useCallback(() => {
     soundSynth.playUiClick();
@@ -653,10 +693,12 @@ export default function App() {
     replayFramesRef.current = [];
     replayPlayingRef.current = false;
     setReplayAvailable(false);
+    const previewMap: MapId =
+      selectedMap === 'random' ? engineRef.current.mapId : selectedMap;
     engineRef.current = createInitialEngineState(
       'TITLE_MENU',
       selectedMode,
-      selectedMap,
+      previewMap,
       p1Fighter,
       p2Fighter
     );
@@ -675,13 +717,15 @@ export default function App() {
   useEffect(() => {
     const engine = engineRef.current;
     if (engine.phase === 'TITLE_MENU') {
+      const previewMap: MapId =
+        selectedMap === 'random' ? engine.mapId : selectedMap;
       engine.mode = selectedMode;
-      engine.mapId = selectedMap;
-      engine.platforms = createMapPlatforms(selectedMap);
-      engine.obstacles = createMapObstacles(selectedMap);
-      engine.destructibles = createMapDestructibles(selectedMap);
-      engine.players[0] = createFighter(0, p1Fighter, false, selectedMap);
-      engine.players[1] = createFighter(1, p2Fighter, true, selectedMap);
+      engine.mapId = previewMap;
+      engine.platforms = createMapPlatforms(previewMap);
+      engine.obstacles = createMapObstacles(previewMap);
+      engine.destructibles = createMapDestructibles(previewMap);
+      engine.players[0] = createFighter(0, p1Fighter, false, previewMap);
+      engine.players[1] = createFighter(1, p2Fighter, true, previewMap);
       engine.projectiles = [];
       engine.zones = [];
       engine.timedActions = [];
@@ -692,6 +736,18 @@ export default function App() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isFormControl =
+        target !== null &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable);
+
+      if (modalOpenRef.current || isFormControl) {
+        return;
+      }
+
       const code = e.code;
       if (
         code === 'Space' ||
@@ -4295,6 +4351,15 @@ export default function App() {
           </div>
 
           <div className="w-full max-w-6xl bg-slate-950/88 border border-white/15 rounded-xl p-4 sm:p-5 shadow-2xl">
+            <AccountBar
+              onOpenEmailAuth={(mode = 'signin') => {
+                setAuthModalMode(mode);
+                setAuthModalOpen(true);
+              }}
+              onOpenProfileModal={() => setProfileModalOpen(true)}
+              onUiClick={() => soundSynth.playUiClick()}
+            />
+
             <PersistentScoreboard
               scoreboard={scoreboard}
               activeMode={selectedMode}
@@ -4342,20 +4407,33 @@ export default function App() {
                 <div>
                   <div className="text-xs font-semibold text-slate-400 mb-1.5">Arena Stage</div>
                   <div className="grid grid-cols-2 gap-1.5">
-                    {(
-                      [
-                        'hive_canopy',
-                        'storm_citadel',
-                        'magma_foundry',
-                        'wind_mill_spire',
-                        'eclipse_temple',
-                        'neon_skyline',
-                        'frost_glacier',
-                        'cyber_factory',
-                        'coral_abyss',
-                        'cosmic_station',
-                      ] as MapId[]
-                    ).map((mId) => {
+                    <button
+                      type="button"
+                      onClick={() => {
+                        soundSynth.playUiClick();
+                        setSelectedMap('random');
+                      }}
+                      className={`col-span-2 flex items-center justify-between gap-2 text-left px-2.5 py-1.5 rounded-md border transition-colors cursor-pointer ${
+                        selectedMap === 'random'
+                          ? 'bg-amber-400 text-slate-950 border-amber-300'
+                          : 'bg-slate-900/90 text-slate-200 border-white/15 hover:border-white/30'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <Shuffle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                        <span className="text-[11px] font-bold leading-tight">Random</span>
+                      </div>
+                      <span
+                        className={`text-[10px] truncate leading-tight ${
+                          selectedMap === 'random'
+                            ? 'text-slate-900 font-semibold'
+                            : 'text-slate-400'
+                        }`}
+                      >
+                        Pick any of the 10 stages
+                      </span>
+                    </button>
+                    {ALL_MAP_IDS.map((mId) => {
                       const m = MAP_SPECS[mId];
                       const active = selectedMap === mId;
                       return (
@@ -4385,7 +4463,9 @@ export default function App() {
                     })}
                   </div>
                   <p className="mt-1.5 text-[11px] text-slate-400 leading-snug">
-                    {MAP_SPECS[selectedMap].mechanicNote}
+                    {selectedMap === 'random'
+                      ? 'Random Stage: Picks one of the 10 interactive arenas when the match starts.'
+                      : MAP_SPECS[selectedMap].mechanicNote}
                   </p>
                 </div>
               </div>
@@ -4478,6 +4558,24 @@ export default function App() {
           onReturnToTitle={returnToTitle}
         />
       )}
+
+      <AuthModal
+        open={authModalOpen}
+        initialMode={authModalMode}
+        onClose={() => setAuthModalOpen(false)}
+        onUiClick={() => soundSynth.playUiClick()}
+      />
+
+      <ProfileModal
+        open={profileModalOpen}
+        onClose={() => setProfileModalOpen(false)}
+        onProfileSaved={(saved) => {
+          setP1Fighter(saved.favoriteFighter);
+          setSelectedMap(saved.defaultMap);
+          setSelectedMode(saved.preferredMode);
+        }}
+        onUiClick={() => soundSynth.playUiClick()}
+      />
     </div>
   );
 }

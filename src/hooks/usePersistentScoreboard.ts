@@ -1,54 +1,20 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PlayMode } from '../game/types';
+import {
+  createEmptyScoreboard,
+  sanitizeScoreboard,
+  type PlayerRecord,
+  type ScoreboardStats,
+} from '../types/account';
 
 export const SCOREBOARD_STORAGE_KEY = 'sky_hive_brawl_scoreboard_v1';
 
-export interface PlayerRecord {
-  wins: number;
-  losses: number;
-}
-
-export interface ScoreboardStats {
-  p1: PlayerRecord;
-  p2: PlayerRecord;
-  cpu: PlayerRecord;
-}
-
-const createEmptyScoreboard = (): ScoreboardStats => ({
-  p1: { wins: 0, losses: 0 },
-  p2: { wins: 0, losses: 0 },
-  cpu: { wins: 0, losses: 0 },
-});
-
-function sanitizeRecord(value: unknown): PlayerRecord {
-  if (!value || typeof value !== 'object') {
-    return { wins: 0, losses: 0 };
-  }
-  const rec = value as Record<string, unknown>;
-  const wins =
-    typeof rec.wins === 'number' && Number.isFinite(rec.wins)
-      ? Math.max(0, Math.floor(rec.wins))
-      : 0;
-  const losses =
-    typeof rec.losses === 'number' && Number.isFinite(rec.losses)
-      ? Math.max(0, Math.floor(rec.losses))
-      : 0;
-  return { wins, losses };
-}
+export type { PlayerRecord, ScoreboardStats };
 
 function parseScoreboard(raw: string | null): ScoreboardStats {
   if (!raw) return createEmptyScoreboard();
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') {
-      return createEmptyScoreboard();
-    }
-    const obj = parsed as Record<string, unknown>;
-    return {
-      p1: sanitizeRecord(obj.p1),
-      p2: sanitizeRecord(obj.p2),
-      cpu: sanitizeRecord(obj.cpu),
-    };
+    return sanitizeScoreboard(JSON.parse(raw));
   } catch {
     return createEmptyScoreboard();
   }
@@ -72,8 +38,34 @@ function writeScoreboardToStorage(stats: ScoreboardStats): void {
   }
 }
 
-export function usePersistentScoreboard() {
+interface UsePersistentScoreboardOptions {
+  cloudScoreboard?: ScoreboardStats | null;
+  isCloudAuthenticated?: boolean;
+  onSaveCloudScoreboard?: (next: ScoreboardStats) => Promise<void>;
+}
+
+export function usePersistentScoreboard(options: UsePersistentScoreboardOptions = {}) {
+  const { cloudScoreboard = null, isCloudAuthenticated = false, onSaveCloudScoreboard } =
+    options;
+
   const [scoreboard, setScoreboard] = useState<ScoreboardStats>(() => readScoreboardFromStorage());
+  const scoreboardRef = useRef<ScoreboardStats>(scoreboard);
+  scoreboardRef.current = scoreboard;
+
+  const isCloudAuthRef = useRef(isCloudAuthenticated);
+  isCloudAuthRef.current = isCloudAuthenticated;
+
+  const saveCloudRef = useRef(onSaveCloudScoreboard);
+  saveCloudRef.current = onSaveCloudScoreboard;
+
+  useEffect(() => {
+    if (isCloudAuthenticated && cloudScoreboard) {
+      const clean = sanitizeScoreboard(cloudScoreboard);
+      scoreboardRef.current = clean;
+      setScoreboard(clean);
+      writeScoreboardToStorage(clean);
+    }
+  }, [cloudScoreboard, isCloudAuthenticated]);
 
   useEffect(() => {
     writeScoreboardToStorage(scoreboard);
@@ -81,8 +73,10 @@ export function usePersistentScoreboard() {
 
   useEffect(() => {
     const handleStorage = (event: StorageEvent) => {
-      if (event.key === SCOREBOARD_STORAGE_KEY) {
-        setScoreboard(parseScoreboard(event.newValue));
+      if (event.key === SCOREBOARD_STORAGE_KEY && !isCloudAuthRef.current) {
+        const next = parseScoreboard(event.newValue);
+        scoreboardRef.current = next;
+        setScoreboard(next);
       }
     };
     window.addEventListener('storage', handleStorage);
@@ -90,31 +84,55 @@ export function usePersistentScoreboard() {
   }, []);
 
   const recordMatchResult = useCallback((winnerSlot: 0 | 1, mode: PlayMode) => {
-    setScoreboard((prev) => {
-      const opponentKey = mode === '1P_AI' ? 'cpu' : 'p2';
-      if (winnerSlot === 0) {
-        return {
-          ...prev,
-          p1: { wins: prev.p1.wins + 1, losses: prev.p1.losses },
-          [opponentKey]: {
-            wins: prev[opponentKey].wins,
-            losses: prev[opponentKey].losses + 1,
-          },
-        };
-      }
-      return {
-        ...prev,
-        p1: { wins: prev.p1.wins, losses: prev.p1.losses + 1 },
-        [opponentKey]: {
-          wins: prev[opponentKey].wins + 1,
-          losses: prev[opponentKey].losses,
-        },
-      };
-    });
+    const prev = scoreboardRef.current;
+    const opponentKey = mode === '1P_AI' ? 'cpu' : 'p2';
+    const next: ScoreboardStats =
+      winnerSlot === 0
+        ? {
+            ...prev,
+            p1: {
+              wins: prev.p1.wins + 1,
+              losses: prev.p1.losses,
+              currentStreak: prev.p1.currentStreak + 1,
+            },
+            [opponentKey]: {
+              wins: prev[opponentKey].wins,
+              losses: prev[opponentKey].losses + 1,
+              currentStreak: 0,
+            },
+          }
+        : {
+            ...prev,
+            p1: {
+              wins: prev.p1.wins,
+              losses: prev.p1.losses + 1,
+              currentStreak: 0,
+            },
+            [opponentKey]: {
+              wins: prev[opponentKey].wins + 1,
+              losses: prev[opponentKey].losses,
+              currentStreak: prev[opponentKey].currentStreak + 1,
+            },
+          };
+
+    scoreboardRef.current = next;
+    setScoreboard(next);
+    writeScoreboardToStorage(next);
+
+    if (isCloudAuthRef.current && saveCloudRef.current) {
+      void saveCloudRef.current(next);
+    }
   }, []);
 
   const resetScoreboard = useCallback(() => {
-    setScoreboard(createEmptyScoreboard());
+    const empty = createEmptyScoreboard();
+    scoreboardRef.current = empty;
+    setScoreboard(empty);
+    writeScoreboardToStorage(empty);
+
+    if (isCloudAuthRef.current && saveCloudRef.current) {
+      void saveCloudRef.current(empty);
+    }
   }, []);
 
   return {

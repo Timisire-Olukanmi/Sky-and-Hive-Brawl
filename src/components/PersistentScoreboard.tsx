@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { RotateCcw, Trophy } from 'lucide-react';
+import { Flame, RotateCcw, Trophy } from 'lucide-react';
 import type { PlayMode } from '../game/types';
 import type { PlayerRecord, ScoreboardStats } from '../hooks/usePersistentScoreboard';
 
@@ -135,7 +135,7 @@ export function PersistentScoreboard({
               }`}
             >
               <div className="min-w-0">
-                <div className="flex items-baseline gap-1.5">
+                <div className="flex items-center gap-1.5 flex-wrap">
                   <span
                     className={`font-display text-sm font-bold truncate ${
                       entry.isActiveParticipant ? entry.accentClass : 'text-slate-200'
@@ -146,6 +146,15 @@ export function PersistentScoreboard({
                   <span className="text-[11px] text-slate-400 truncate">
                     {entry.role}
                   </span>
+                  {entry.record.currentStreak > 3 && (
+                    <span
+                      title={`${entry.label} is on a ${entry.record.currentStreak}-win streak`}
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-400/50 text-amber-300 font-mono-num text-[10px] font-bold leading-none whitespace-nowrap shrink-0"
+                    >
+                      <Flame className="w-3 h-3 text-amber-400" aria-hidden="true" />
+                      <span>{entry.record.currentStreak}W Streak</span>
+                    </span>
+                  )}
                 </div>
                 <div className="text-[11px] text-slate-400 font-mono-num">
                   {played === 0 ? 'Awaiting first match' : `${played} played · Win ${winRate}`}
@@ -163,6 +172,20 @@ export function PersistentScoreboard({
                   <div className="text-[10px] font-medium text-slate-400">Losses</div>
                   <div className="text-base font-extrabold text-rose-400 leading-tight">
                     {entry.record.losses}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-[10px] font-medium text-slate-400">Streak</div>
+                  <div
+                    className={`text-base font-extrabold leading-tight ${
+                      entry.record.currentStreak > 3
+                        ? 'text-amber-300'
+                        : entry.record.currentStreak > 0
+                        ? 'text-slate-100'
+                        : 'text-slate-500'
+                    }`}
+                  >
+                    {entry.record.currentStreak}
                   </div>
                 </div>
               </div>

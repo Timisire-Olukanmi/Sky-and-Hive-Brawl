@@ -1,0 +1,147 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Owner-scoped player profile, game preferences, and lifetime match scoreboard stats.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the profile owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Editable fighter display name shown on the Title Screen account bar.",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "favoriteFighter": {
+          "type": "string",
+          "description": "Default fighter selected automatically on sign-in.",
+          "enum": [
+            "honey_shell",
+            "cloudier",
+            "eve",
+            "spidra",
+            "marshal_bolt",
+            "pyro_jack",
+            "aqua_nyx",
+            "blade_zero",
+            "moss_golem",
+            "astro_pip"
+          ]
+        },
+        "defaultMap": {
+          "type": "string",
+          "description": "Default arena stage or random stage preference.",
+          "enum": [
+            "hive_canopy",
+            "storm_citadel",
+            "magma_foundry",
+            "wind_mill_spire",
+            "eclipse_temple",
+            "neon_skyline",
+            "frost_glacier",
+            "cyber_factory",
+            "coral_abyss",
+            "cosmic_station",
+            "random"
+          ]
+        },
+        "preferredMode": {
+          "type": "string",
+          "description": "Preferred battle mode on the Title Screen.",
+          "enum": ["1P_AI", "2P_LOCAL"]
+        },
+        "scoreboard": {
+          "type": "object",
+          "description": "Nested map containing p1, p2, and cpu records with integer wins, losses, and currentStreak."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the user profile was first created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the last profile or scoreboard update."
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "favoriteFighter",
+        "defaultMap",
+        "preferredMode",
+        "scoreboard",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UserPrivateAccount": {
+      "title": "UserPrivateAccount",
+      "description": "Strictly isolated PII and authentication provider metadata for the account owner.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the account owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "description": "Account email address (empty string for guest or email-less providers).",
+          "minLength": 0,
+          "maxLength": 254
+        },
+        "authProvider": {
+          "type": "string",
+          "description": "Primary authentication provider identifier.",
+          "enum": ["google", "password", "github", "anonymous"]
+        },
+        "isGuest": {
+          "type": "boolean",
+          "description": "Whether the account is currently an anonymous guest session."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the private account record was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest login or provider update."
+        }
+      },
+      "required": [
+        "uid",
+        "email",
+        "authProvider",
+        "isGuest",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Owner-only player profile, fighter/stage preferences, and cloud-synced lifetime scoreboard."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": {
+        "$ref": "#/entities/UserPrivateAccount"
+      },
+      "description": "Owner-only isolated PII document (docId: account) storing email and login provider metadata."
+    }
+  }
+}

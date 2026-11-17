@@ -1,0 +1,230 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidFighterId(fighterId) {
+      return fighterId in [
+        'honey_shell',
+        'cloudier',
+        'eve',
+        'spidra',
+        'marshal_bolt',
+        'pyro_jack',
+        'aqua_nyx',
+        'blade_zero',
+        'moss_golem',
+        'astro_pip'
+      ];
+    }
+
+    function isValidMapSelection(mapId) {
+      return mapId in [
+        'hive_canopy',
+        'storm_citadel',
+        'magma_foundry',
+        'wind_mill_spire',
+        'eclipse_temple',
+        'neon_skyline',
+        'frost_glacier',
+        'cyber_factory',
+        'coral_abyss',
+        'cosmic_station',
+        'random'
+      ];
+    }
+
+    function isValidPlayMode(mode) {
+      return mode in ['1P_AI', '2P_LOCAL'];
+    }
+
+    function isValidPlayerRecord(rec) {
+      return rec is map
+        && rec.keys().hasAll(['wins', 'losses', 'currentStreak'])
+        && rec.keys().hasOnly(['wins', 'losses', 'currentStreak'])
+        && rec.wins is int && rec.wins >= 0 && rec.wins <= 1000000
+        && rec.losses is int && rec.losses >= 0 && rec.losses <= 1000000
+        && rec.currentStreak is int && rec.currentStreak >= 0 && rec.currentStreak <= 1000000;
+    }
+
+    function isValidScoreboard(sb) {
+      return sb is map
+        && sb.keys().hasAll(['p1', 'p2', 'cpu'])
+        && sb.keys().hasOnly(['p1', 'p2', 'cpu'])
+        && isValidPlayerRecord(sb.p1)
+        && isValidPlayerRecord(sb.p2)
+        && isValidPlayerRecord(sb.cpu);
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll([
+          'uid',
+          'displayName',
+          'favoriteFighter',
+          'defaultMap',
+          'preferredMode',
+          'scoreboard',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid',
+          'displayName',
+          'favoriteFighter',
+          'defaultMap',
+          'preferredMode',
+          'scoreboard',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 32
+        && data.favoriteFighter is string
+        && data.favoriteFighter.size() <= 32
+        && isValidFighterId(data.favoriteFighter)
+        && data.defaultMap is string
+        && data.defaultMap.size() <= 32
+        && isValidMapSelection(data.defaultMap)
+        && data.preferredMode is string
+        && data.preferredMode.size() <= 16
+        && isValidPlayMode(data.preferredMode)
+        && isValidScoreboard(data.scoreboard)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPrivateAccount(data, userId) {
+      return data.keys().hasAll([
+          'uid',
+          'email',
+          'authProvider',
+          'isGuest',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid',
+          'email',
+          'authProvider',
+          'isGuest',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.email is string
+        && data.email.size() <= 254
+        && (
+          data.email == ''
+          || (request.auth.token.email != null && data.email == request.auth.token.email)
+        )
+        && data.authProvider is string
+        && data.authProvider.size() <= 24
+        && data.authProvider in ['google', 'password', 'github', 'anonymous']
+        && data.isGuest is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+      allow delete: if false;
+
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action: Edit profile and fighter/stage defaults
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'displayName',
+            'favoriteFighter',
+            'defaultMap',
+            'preferredMode',
+            'updatedAt'
+          ])
+          ||
+          // Action: Update or reset lifetime scoreboard stats
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'scoreboard',
+            'updatedAt'
+          ])
+          ||
+          // Action: Combined profile + scoreboard sync
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'displayName',
+            'favoriteFighter',
+            'defaultMap',
+            'preferredMode',
+            'scoreboard',
+            'updatedAt'
+          ])
+        );
+
+      match /private/{docId} {
+        allow get: if isValidId(userId) && docId == 'account' && isOwner(userId);
+        allow list: if false;
+        allow delete: if false;
+
+        allow create: if isValidId(userId)
+          && docId == 'account'
+          && isOwner(userId)
+          && isValidPrivateAccount(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+
+        allow update: if isValidId(userId)
+          && docId == 'account'
+          && isOwner(userId)
+          && isValidPrivateAccount(incoming(), userId)
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'email',
+            'authProvider',
+            'isGuest',
+            'updatedAt'
+          ]);
+      }
+    }
+  }
+}
