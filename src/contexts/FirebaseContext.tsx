@@ -234,6 +234,8 @@ export function FirebaseProvider({ children }: { children: ReactNode }) {
   const [authError, setAuthError] = useState<AuthFeedbackError | null>(null);
 
   const activeUidRef = useRef<string | null>(null);
+  const ensuringDocsRef = useRef<Map<string, Promise<void>>>(new Map());
+  const pendingDisplayNameRef = useRef<string | null>(null);
 
   const clearAuthError = useCallback(() => {
     setAuthError(null);
@@ -241,97 +243,114 @@ export function FirebaseProvider({ children }: { children: ReactNode }) {
 
   const ensureUserDocuments = useCallback(async (currentUser: User) => {
     const uid = currentUser.uid;
-    const profilePath = `users/${uid}`;
-    const privatePath = `users/${uid}/private/account`;
-    const profileRef = doc(db, 'users', uid);
-    const privateRef = doc(db, 'users', uid, 'private', 'account');
-
-    let profileSnap;
-    try {
-      profileSnap = await getDoc(profileRef);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.GET, profilePath);
+    const inFlight = ensuringDocsRef.current.get(uid);
+    if (inFlight) {
+      await inFlight;
+      return;
     }
 
-    if (!profileSnap.exists()) {
-      const defaultName = currentUser.isAnonymous
-        ? `Guest_${uid.slice(0, 5)}`
-        : sanitizeDisplayName(
-            currentUser.displayName || currentUser.email?.split('@')[0],
-            'Brawler'
-          );
-      const seededScoreboard = sanitizeScoreboard(readLocalScoreboardSeed());
-      const newProfile: UserProfileDoc = {
-        uid,
-        displayName: defaultName,
-        favoriteFighter: 'honey_shell',
-        defaultMap: 'hive_canopy',
-        preferredMode: '1P_AI',
-        scoreboard: seededScoreboard,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      };
+    const work = (async () => {
+      const profilePath = `users/${uid}`;
+      const privatePath = `users/${uid}/private/account`;
+      const profileRef = doc(db, 'users', uid);
+      const privateRef = doc(db, 'users', uid, 'private', 'account');
+
+      let profileSnap;
       try {
-        await setDoc(profileRef, newProfile);
+        profileSnap = await getDoc(profileRef);
       } catch (error) {
-        handleFirestoreError(error, OperationType.CREATE, profilePath);
+        handleFirestoreError(error, OperationType.GET, profilePath);
       }
-    }
 
-    let privateSnap;
-    try {
-      privateSnap = await getDoc(privateRef);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.GET, privatePath);
-    }
-
-    const providerKind = detectProviderKind(currentUser);
-    const safeEmail = (currentUser.email ?? '').slice(0, EMAIL_MAX_LENGTH);
-
-    if (!privateSnap.exists()) {
-      const newPrivate: UserPrivateAccountDoc = {
-        uid,
-        email: safeEmail,
-        authProvider: providerKind,
-        isGuest: currentUser.isAnonymous,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      };
-      try {
-        await setDoc(privateRef, newPrivate);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.CREATE, privatePath);
-      }
-      setPrivateAccount({
-        uid,
-        email: safeEmail,
-        authProvider: providerKind,
-        isGuest: currentUser.isAnonymous,
-      });
-    } else {
-      const existingData = privateSnap.data() as UserPrivateAccountDoc;
-      if (
-        existingData.email !== safeEmail ||
-        existingData.authProvider !== providerKind ||
-        existingData.isGuest !== currentUser.isAnonymous
-      ) {
+      if (!profileSnap.exists()) {
+        const queuedName = pendingDisplayNameRef.current;
+        pendingDisplayNameRef.current = null;
+        const defaultName = currentUser.isAnonymous
+          ? `Guest_${uid.slice(0, 5)}`
+          : sanitizeDisplayName(
+              queuedName || currentUser.displayName || currentUser.email?.split('@')[0],
+              'Brawler'
+            );
+        const seededScoreboard = sanitizeScoreboard(readLocalScoreboardSeed());
+        const newProfile: UserProfileDoc = {
+          uid,
+          displayName: defaultName,
+          favoriteFighter: 'honey_shell',
+          defaultMap: 'hive_canopy',
+          preferredMode: '1P_AI',
+          scoreboard: seededScoreboard,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        };
         try {
-          await updateDoc(privateRef, {
-            email: safeEmail,
-            authProvider: providerKind,
-            isGuest: currentUser.isAnonymous,
-            updatedAt: serverTimestamp(),
-          });
+          await setDoc(profileRef, newProfile);
         } catch (error) {
-          handleFirestoreError(error, OperationType.UPDATE, privatePath);
+          handleFirestoreError(error, OperationType.CREATE, profilePath);
         }
       }
-      setPrivateAccount({
-        uid,
-        email: safeEmail,
-        authProvider: providerKind,
-        isGuest: currentUser.isAnonymous,
-      });
+
+      let privateSnap;
+      try {
+        privateSnap = await getDoc(privateRef);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, privatePath);
+      }
+
+      const providerKind = detectProviderKind(currentUser);
+      const safeEmail = (currentUser.email ?? '').slice(0, EMAIL_MAX_LENGTH);
+
+      if (!privateSnap.exists()) {
+        const newPrivate: UserPrivateAccountDoc = {
+          uid,
+          email: safeEmail,
+          authProvider: providerKind,
+          isGuest: currentUser.isAnonymous,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        };
+        try {
+          await setDoc(privateRef, newPrivate);
+        } catch (error) {
+          handleFirestoreError(error, OperationType.CREATE, privatePath);
+        }
+        setPrivateAccount({
+          uid,
+          email: safeEmail,
+          authProvider: providerKind,
+          isGuest: currentUser.isAnonymous,
+        });
+      } else {
+        const existingData = privateSnap.data() as UserPrivateAccountDoc;
+        if (
+          existingData.email !== safeEmail ||
+          existingData.authProvider !== providerKind ||
+          existingData.isGuest !== currentUser.isAnonymous
+        ) {
+          try {
+            await updateDoc(privateRef, {
+              email: safeEmail,
+              authProvider: providerKind,
+              isGuest: currentUser.isAnonymous,
+              updatedAt: serverTimestamp(),
+            });
+          } catch (error) {
+            handleFirestoreError(error, OperationType.UPDATE, privatePath);
+          }
+        }
+        setPrivateAccount({
+          uid,
+          email: safeEmail,
+          authProvider: providerKind,
+          isGuest: currentUser.isAnonymous,
+        });
+      }
+    })();
+
+    ensuringDocsRef.current.set(uid, work);
+    try {
+      await work;
+    } finally {
+      ensuringDocsRef.current.delete(uid);
     }
   }, []);
 
@@ -460,13 +479,18 @@ export function FirebaseProvider({ children }: { children: ReactNode }) {
     (email: string, password: string, displayName: string) =>
       runAuthAction('password', async () => {
         const cleanName = sanitizeDisplayName(displayName, 'Brawler');
-        const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-        await updateProfile(cred.user, { displayName: cleanName });
-        await cred.user.getIdToken(true);
-        void sendEmailVerification(cred.user).catch(() => {
-          // Non-blocking verification email
-        });
-        await ensureUserDocuments(cred.user);
+        pendingDisplayNameRef.current = cleanName;
+        try {
+          const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+          await updateProfile(cred.user, { displayName: cleanName });
+          await cred.user.getIdToken(true);
+          void sendEmailVerification(cred.user).catch(() => {
+            // Non-blocking verification email
+          });
+          await ensureUserDocuments(cred.user);
+        } finally {
+          pendingDisplayNameRef.current = null;
+        }
       }),
     [ensureUserDocuments, runAuthAction]
   );

@@ -1,4 +1,4 @@
-export type GamePhase = 'TITLE_MENU' | 'PLAYING' | 'PAUSED' | 'GAME_OVER' | 'REPLAY';
+export type GamePhase = 'HOME' | 'TITLE_MENU' | 'PLAYING' | 'PAUSED' | 'GAME_OVER' | 'REPLAY';
 
 export type PlayMode = '1P_AI' | '2P_LOCAL';
 

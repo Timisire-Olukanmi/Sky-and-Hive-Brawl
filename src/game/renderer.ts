@@ -14,6 +14,314 @@ import type {
 
 const INK = '#18181B';
 
+const PIXEL_STAGE_WIDTH = 480;
+const PIXEL_STAGE_HEIGHT = 270;
+const WORLD_TO_PIXEL = PIXEL_STAGE_WIDTH / WORLD_WIDTH; // Exact 0.375 (3:8 ratio)
+const SPRITE_SCRATCH_SIZE = 128;
+const SPRITE_ANCHOR_X = 64;
+const SPRITE_ANCHOR_Y = 96;
+const PROJ_SCRATCH_SIZE = 48;
+const PODIUM_PIXEL_WIDTH = 230;
+const PODIUM_PIXEL_HEIGHT = 108;
+const PORTRAIT_PIXEL_SIZE = 48;
+
+const BAYER_2X2 = [-5, 5, 3, -3];
+
+interface PixelScratchSurface {
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  mask: Uint8Array;
+}
+
+let stageSurface: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null = null;
+let spriteSurface: PixelScratchSurface | null = null;
+let projSurface: PixelScratchSurface | null = null;
+let podiumSurface: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null = null;
+let portraitSurface: PixelScratchSurface | null = null;
+
+function getStageSurface(): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null {
+  if (typeof document === 'undefined') return null;
+  if (!stageSurface) {
+    const canvas = document.createElement('canvas');
+    canvas.width = PIXEL_STAGE_WIDTH;
+    canvas.height = PIXEL_STAGE_HEIGHT;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.imageSmoothingEnabled = false;
+    stageSurface = { canvas, ctx };
+  }
+  return stageSurface;
+}
+
+function getSpriteSurface(): PixelScratchSurface | null {
+  if (typeof document === 'undefined') return null;
+  if (!spriteSurface) {
+    const canvas = document.createElement('canvas');
+    canvas.width = SPRITE_SCRATCH_SIZE;
+    canvas.height = SPRITE_SCRATCH_SIZE;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.imageSmoothingEnabled = false;
+    spriteSurface = {
+      canvas,
+      ctx,
+      mask: new Uint8Array(SPRITE_SCRATCH_SIZE * SPRITE_SCRATCH_SIZE),
+    };
+  }
+  return spriteSurface;
+}
+
+function getProjSurface(): PixelScratchSurface | null {
+  if (typeof document === 'undefined') return null;
+  if (!projSurface) {
+    const canvas = document.createElement('canvas');
+    canvas.width = PROJ_SCRATCH_SIZE;
+    canvas.height = PROJ_SCRATCH_SIZE;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.imageSmoothingEnabled = false;
+    projSurface = {
+      canvas,
+      ctx,
+      mask: new Uint8Array(PROJ_SCRATCH_SIZE * PROJ_SCRATCH_SIZE),
+    };
+  }
+  return projSurface;
+}
+
+function getPodiumSurface(): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null {
+  if (typeof document === 'undefined') return null;
+  if (!podiumSurface) {
+    const canvas = document.createElement('canvas');
+    canvas.width = PODIUM_PIXEL_WIDTH;
+    canvas.height = PODIUM_PIXEL_HEIGHT;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.imageSmoothingEnabled = false;
+    podiumSurface = { canvas, ctx };
+  }
+  return podiumSurface;
+}
+
+function getPortraitSurface(): PixelScratchSurface | null {
+  if (typeof document === 'undefined') return null;
+  if (!portraitSurface) {
+    const canvas = document.createElement('canvas');
+    canvas.width = PORTRAIT_PIXEL_SIZE;
+    canvas.height = PORTRAIT_PIXEL_SIZE;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.imageSmoothingEnabled = false;
+    portraitSurface = {
+      canvas,
+      ctx,
+      mask: new Uint8Array(PORTRAIT_PIXEL_SIZE * PORTRAIT_PIXEL_SIZE),
+    };
+  }
+  return portraitSurface;
+}
+
+function parseHexColor(hex: string): [number, number, number] {
+  const clean = hex.replace('#', '');
+  if (clean.length === 3) {
+    return [
+      parseInt(clean[0] + clean[0], 16) || 0,
+      parseInt(clean[1] + clean[1], 16) || 0,
+      parseInt(clean[2] + clean[2], 16) || 0,
+    ];
+  }
+  const num = parseInt(clean.slice(0, 6), 16);
+  if (Number.isNaN(num)) return [15, 23, 42];
+  return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
+}
+
+function lerpRgbColor(
+  a: [number, number, number],
+  b: [number, number, number],
+  t: number
+): string {
+  const r = Math.round(a[0] + (b[0] - a[0]) * t);
+  const g = Math.round(a[1] + (b[1] - a[1]) * t);
+  const bl = Math.round(a[2] + (b[2] - a[2]) * t);
+  return `rgb(${r}, ${g}, ${bl})`;
+}
+
+function drawSteppedPixelSky(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  skyTop: string,
+  skyMid: string,
+  skyBottom: string
+): void {
+  const cTop = parseHexColor(skyTop);
+  const cMid = parseHexColor(skyMid);
+  const cBot = parseHexColor(skyBottom);
+  const bands = 16;
+  const bandH = Math.ceil(height / bands);
+
+  for (let i = 0; i < bands; i++) {
+    const t = i / (bands - 1);
+    const color =
+      t < 0.58
+        ? lerpRgbColor(cTop, cMid, t / 0.58)
+        : lerpRgbColor(cMid, cBot, (t - 0.58) / 0.42);
+    const y0 = Math.floor((i * height) / bands);
+    const y1 = Math.floor(((i + 1) * height) / bands);
+    ctx.fillStyle = color;
+    ctx.fillRect(0, y0, width, Math.max(bandH, y1 - y0));
+
+    // Classic 1px ordered pixel checkerboard dither strip between sky bands
+    if (i < bands - 1 && y1 - 1 >= 0) {
+      const nextT = (i + 1) / (bands - 1);
+      const nextColor =
+        nextT < 0.58
+          ? lerpRgbColor(cTop, cMid, nextT / 0.58)
+          : lerpRgbColor(cMid, cBot, (nextT - 0.58) / 0.42);
+      ctx.fillStyle = nextColor;
+      for (let x = i % 2; x < width; x += 2) {
+        ctx.fillRect(x, y1 - 1, 1, 1);
+      }
+    }
+  }
+}
+
+function quantizePixelStage(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number
+): void {
+  const img = ctx.getImageData(0, 0, width, height);
+  const data = img.data;
+  for (let y = 0; y < height; y++) {
+    const rowOff = y * width;
+    const bayerRow = (y & 1) << 1;
+    for (let x = 0; x < width; x++) {
+      const idx = (rowOff + x) << 2;
+      const d = BAYER_2X2[bayerRow | (x & 1)];
+      let r = data[idx] + d;
+      let g = data[idx + 1] + d;
+      let b = data[idx + 2] + d;
+      r = r < 0 ? 0 : r > 255 ? 255 : r;
+      g = g < 0 ? 0 : g > 255 ? 255 : g;
+      b = b < 0 ? 0 : b > 255 ? 255 : b;
+      // 17-step pixel quantization per channel (16-bit style crisp bands)
+      data[idx] = Math.min(255, ((r + 8) >> 4) << 4);
+      data[idx + 1] = Math.min(255, ((g + 8) >> 4) << 4);
+      data[idx + 2] = Math.min(255, ((b + 8) >> 4) << 4);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function applyPixelSpriteOutline(
+  surface: PixelScratchSurface,
+  opts?: {
+    hitFlash?: boolean;
+    poisoned?: boolean;
+    alphaThreshold?: number;
+  }
+): void {
+  const { ctx, canvas, mask } = surface;
+  const w = canvas.width;
+  const h = canvas.height;
+  const alphaThreshold = opts?.alphaThreshold ?? 72;
+  const hitFlash = Boolean(opts?.hitFlash);
+  const poisoned = Boolean(opts?.poisoned);
+
+  const img = ctx.getImageData(0, 0, w, h);
+  const data = img.data;
+  const total = w * h;
+
+  for (let i = 0; i < total; i++) {
+    const idx = i << 2;
+    const a = data[idx + 3];
+    if (a >= alphaThreshold) {
+      mask[i] = 1;
+      let r = Math.min(255, ((data[idx] + 8) >> 4) << 4);
+      let g = Math.min(255, ((data[idx + 1] + 8) >> 4) << 4);
+      let b = Math.min(255, ((data[idx + 2] + 8) >> 4) << 4);
+
+      if (r <= 36 && g <= 36 && b <= 36) {
+        r = 20;
+        g = 20;
+        b = 24;
+      }
+
+      if (poisoned) {
+        r = Math.round(r * 0.62 + 168 * 0.38);
+        g = Math.round(g * 0.62 + 85 * 0.38);
+        b = Math.round(b * 0.62 + 247 * 0.38);
+      }
+
+      if (hitFlash) {
+        r = Math.round(r * 0.18 + 255 * 0.82);
+        g = Math.round(g * 0.18 + 255 * 0.82);
+        b = Math.round(b * 0.18 + 255 * 0.82);
+      }
+
+      data[idx] = r;
+      data[idx + 1] = g;
+      data[idx + 2] = b;
+      data[idx + 3] = 255;
+    } else {
+      mask[i] = 0;
+      data[idx + 3] = 0;
+    }
+  }
+
+  // Crisp 1-pixel stepped dark-ink silhouette outline (#141418) matching reference sprite
+  const outR = hitFlash ? 248 : 20;
+  const outG = hitFlash ? 250 : 20;
+  const outB = hitFlash ? 252 : 24;
+
+  for (let y = 0; y < h; y++) {
+    const rowOff = y * w;
+    for (let x = 0; x < w; x++) {
+      const i = rowOff + x;
+      if (mask[i] === 0) {
+        const hasNeighbor =
+          (x > 0 && mask[i - 1] === 1) ||
+          (x < w - 1 && mask[i + 1] === 1) ||
+          (y > 0 && mask[i - w] === 1) ||
+          (y < h - 1 && mask[i + w] === 1);
+        if (hasNeighbor) {
+          const idx = i << 2;
+          data[idx] = outR;
+          data[idx + 1] = outG;
+          data[idx + 2] = outB;
+          data[idx + 3] = 255;
+        }
+      }
+    }
+  }
+
+  ctx.putImageData(img, 0, 0);
+}
+
+function drawPixelLabel(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  px: number,
+  py: number,
+  color: string,
+  font = '700 8px "JetBrains Mono", monospace'
+): void {
+  const rx = Math.round(px);
+  const ry = Math.round(py);
+  ctx.save();
+  ctx.font = font;
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#0F172A';
+  ctx.fillText(text, rx - 1, ry);
+  ctx.fillText(text, rx + 1, ry);
+  ctx.fillText(text, rx, ry - 1);
+  ctx.fillText(text, rx, ry + 1);
+  ctx.fillStyle = color;
+  ctx.fillText(text, rx, ry);
+  ctx.restore();
+}
+
 export function renderGameFrame(
   ctx: CanvasRenderingContext2D,
   canvasWidth: number,
@@ -21,118 +329,162 @@ export function renderGameFrame(
   state: GameEngineState
 ): void {
   const map = MAP_SPECS[state.mapId];
+  const stage = getStageSurface();
 
-  const bgGrad = ctx.createLinearGradient(0, 0, 0, canvasHeight);
-  bgGrad.addColorStop(0, map.skyTop);
-  bgGrad.addColorStop(0.58, map.skyMid);
-  bgGrad.addColorStop(1, map.skyBottom);
-  ctx.fillStyle = bgGrad;
-  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  if (!stage) return;
 
-  const scale = Math.min(canvasWidth / WORLD_WIDTH, canvasHeight / WORLD_HEIGHT);
-  const offsetX = (canvasWidth - WORLD_WIDTH * scale) * 0.5;
-  const offsetY = (canvasHeight - WORLD_HEIGHT * scale) * 0.5;
+  const sCtx = stage.ctx;
+  sCtx.imageSmoothingEnabled = false;
 
-  const shakeX =
+  // 1. Crisp stepped & checkerboard-dithered pixel sky bands
+  drawSteppedPixelSky(
+    sCtx,
+    PIXEL_STAGE_WIDTH,
+    PIXEL_STAGE_HEIGHT,
+    map.skyTop,
+    map.skyMid,
+    map.skyBottom
+  );
+
+  const shakePxX =
     state.shakeIntensity > 0.2
-      ? (Math.random() - 0.5) * state.shakeIntensity * 2
+      ? Math.round((Math.random() - 0.5) * state.shakeIntensity * 2 * WORLD_TO_PIXEL)
       : 0;
-  const shakeY =
+  const shakePxY =
     state.shakeIntensity > 0.2
-      ? (Math.random() - 0.5) * state.shakeIntensity * 2
+      ? Math.round((Math.random() - 0.5) * state.shakeIntensity * 2 * WORLD_TO_PIXEL)
       : 0;
 
-  ctx.save();
-  ctx.translate(offsetX + shakeX * scale, offsetY + shakeY * scale);
-  ctx.scale(scale, scale);
+  sCtx.save();
+  sCtx.translate(shakePxX, shakePxY);
+  sCtx.scale(WORLD_TO_PIXEL, WORLD_TO_PIXEL);
 
-  // 1. Background Scenery
-  drawMapBackdrop(ctx, map, state.ambientTime, state.lightningFlash, state.windForceX);
+  // 2. Stage Backdrop, Platforms, Obstacles, Honey Puddles & Destructibles
+  drawMapBackdrop(sCtx, map, state.ambientTime, state.lightningFlash, state.windForceX);
 
-  // 2. Dynamic Platforms (reads live state.platforms)
   for (const platform of state.platforms) {
-    drawPlatform(ctx, platform, state.ambientTime);
+    drawPlatform(sCtx, platform, state.ambientTime);
   }
 
-  // 3. Stage Obstacles behind/on platforms (lava geyser, jump pads, wind bumper, pendulum)
   for (const obs of state.obstacles) {
-    drawObstacle(ctx, obs, state.ambientTime);
+    drawObstacle(sCtx, obs, state.ambientTime);
   }
 
-  // 4. Ground Zones behind fighters (honey puddles)
   for (const zone of state.zones) {
     if (zone.kind === 'honey_puddle') {
-      drawZoneEffect(ctx, zone, state.ambientTime);
+      drawZoneEffect(sCtx, zone, state.ambientTime);
     }
   }
 
-  // 4.5. Map-themed Destructible Stage Props
   for (const prop of state.destructibles) {
-    drawDestructible(ctx, prop, state.ambientTime);
+    drawDestructible(sCtx, prop, state.ambientTime);
   }
+  sCtx.restore();
 
-  // 5. Fighters
+  // Quantize & ordered-dither the entire map environment into crisp 16-bit pixel art
+  quantizePixelStage(sCtx, PIXEL_STAGE_WIDTH, PIXEL_STAGE_HEIGHT);
+
+  // 3. Fighter shadows, victory beams, and ground auras
+  sCtx.save();
+  sCtx.translate(shakePxX, shakePxY);
+  sCtx.scale(WORLD_TO_PIXEL, WORLD_TO_PIXEL);
   for (const player of state.players) {
     if (player.stocks > 0 || player.animState === 'ko') {
-      drawFighter(ctx, player, state.ambientTime);
+      drawFighterStageBackdrop(sCtx, player, state.ambientTime);
+    }
+  }
+  sCtx.restore();
+
+  // 4. Crisp 1px-outlined Pixel Art Fighters
+  for (const player of state.players) {
+    if (player.stocks > 0 || player.animState === 'ko') {
+      drawFighter(sCtx, player, state.ambientTime, shakePxX, shakePxY);
     }
   }
 
-  // 6. Towering Zones (Cloud Wall & Lightning Pillars)
+  // 5. Towering Zones, Slashes, Status Auras & Pixel Particles
+  sCtx.save();
+  sCtx.translate(shakePxX, shakePxY);
+  sCtx.scale(WORLD_TO_PIXEL, WORLD_TO_PIXEL);
+
+  for (const player of state.players) {
+    if (player.stocks > 0 || player.animState === 'ko') {
+      drawFighterStatusAuras(sCtx, player, state.ambientTime);
+    }
+  }
+
   for (const zone of state.zones) {
     if (zone.kind !== 'honey_puddle') {
-      drawZoneEffect(ctx, zone, state.ambientTime);
+      drawZoneEffect(sCtx, zone, state.ambientTime);
     }
   }
 
-  // 7. Distinct Attack Visuals
   for (const slash of state.slashes) {
-    drawSlashEffect(ctx, slash);
+    drawSlashEffect(sCtx, slash);
   }
+  sCtx.restore();
 
-  // 8. Projectiles
+  // 6. Crisp 1px-outlined Pixel Projectiles
   for (const proj of state.projectiles) {
-    drawProjectile(ctx, proj);
+    drawPixelProjectile(sCtx, proj, shakePxX, shakePxY);
   }
 
-  // 9. Pooled Particles
+  // 7. Crisp Square Pixel Particles (snapped to pixel grid)
   for (const p of state.particles) {
     if (!p.active) continue;
     const t = Math.max(0, p.life / p.maxLife);
-    ctx.save();
-    ctx.globalAlpha = p.alpha * t;
+    const px = Math.round(p.x * WORLD_TO_PIXEL + shakePxX);
+    const py = Math.round(p.y * WORLD_TO_PIXEL + shakePxY);
+    sCtx.save();
+    sCtx.globalAlpha = p.alpha * t;
     if (p.shape === 'ring') {
-      ctx.strokeStyle = p.color;
-      ctx.lineWidth = Math.max(2, p.size * 0.14 * t);
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size * (1.8 - t * 0.8), 0, Math.PI * 2);
-      ctx.stroke();
+      const r = Math.max(2, Math.round(p.size * (1.8 - t * 0.8) * WORLD_TO_PIXEL));
+      sCtx.strokeStyle = p.color;
+      sCtx.lineWidth = 1;
+      sCtx.strokeRect(px - r, py - r, r * 2, r * 2);
     } else if (p.shape === 'spark') {
-      ctx.fillStyle = p.color;
-      ctx.translate(p.x, p.y);
-      ctx.rotate(Math.atan2(p.vy, p.vx));
-      ctx.fillRect(-p.size * 1.4, -p.size * 0.35, p.size * 2.8, p.size * 0.7);
-    } else if (p.shape === 'drip') {
-      ctx.fillStyle = p.color;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size * 0.65, 0, Math.PI * 2);
-      ctx.fill();
+      const len = Math.max(2, Math.round(p.size * 2.2 * WORLD_TO_PIXEL));
+      const thick = Math.max(1, Math.round(p.size * 0.65 * WORLD_TO_PIXEL));
+      sCtx.fillStyle = p.color;
+      sCtx.translate(px, py);
+      sCtx.rotate(Math.atan2(p.vy, p.vx));
+      sCtx.fillRect(-Math.round(len * 0.5), -Math.round(thick * 0.5), len, thick);
     } else {
-      ctx.fillStyle = p.color;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size * (0.4 + 0.6 * t), 0, Math.PI * 2);
-      ctx.fill();
+      const sz = Math.max(1, Math.round(p.size * (0.45 + 0.55 * t) * WORLD_TO_PIXEL * 1.4));
+      const half = Math.floor(sz * 0.5);
+      sCtx.fillStyle = p.color;
+      sCtx.fillRect(px - half, py - half, sz, sz);
     }
-    ctx.restore();
+    sCtx.restore();
+  }
+
+  // 8. Crisp pixel overhead fighter tags (P1 / CPU / P2 & Taunt ULT +9%)
+  for (const player of state.players) {
+    if (player.stocks > 0 || player.animState === 'ko') {
+      drawFighterPixelTags(sCtx, player, shakePxX, shakePxY);
+    }
   }
 
   if (state.lightningFlash > 0.01) {
-    ctx.save();
-    ctx.fillStyle = `rgba(224, 242, 254, ${Math.min(0.45, state.lightningFlash * 0.45)})`;
-    ctx.fillRect(-200, -200, WORLD_WIDTH + 400, WORLD_HEIGHT + 400);
-    ctx.restore();
+    sCtx.save();
+    sCtx.fillStyle = `rgba(224, 242, 254, ${Math.min(0.45, state.lightningFlash * 0.45)})`;
+    sCtx.fillRect(0, 0, PIXEL_STAGE_WIDTH, PIXEL_STAGE_HEIGHT);
+    sCtx.restore();
   }
 
+  // 9. Blit 480x270 Pixel Stage Buffer onto main display canvas with nearest-neighbor scaling
+  ctx.save();
+  ctx.fillStyle = '#020617';
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  ctx.imageSmoothingEnabled = false;
+
+  const scale = Math.min(canvasWidth / PIXEL_STAGE_WIDTH, canvasHeight / PIXEL_STAGE_HEIGHT);
+  const drawW = Math.round(PIXEL_STAGE_WIDTH * scale);
+  const drawH = Math.round(PIXEL_STAGE_HEIGHT * scale);
+  const drawX = Math.round((canvasWidth - drawW) * 0.5);
+  const drawY = Math.round((canvasHeight - drawH) * 0.5);
+
+  ctx.drawImage(stage.canvas, drawX, drawY, drawW, drawH);
   ctx.restore();
 }
 
@@ -1753,48 +2105,32 @@ function drawZoneEffect(ctx: CanvasRenderingContext2D, z: ZoneEntity, time: numb
   ctx.restore();
 }
 
-function drawFighter(ctx: CanvasRenderingContext2D, f: FighterEntity, time: number): void {
+function drawFighterStageBackdrop(
+  ctx: CanvasRenderingContext2D,
+  f: FighterEntity,
+  time: number
+): void {
   ctx.save();
 
-  if (f.invulnTimer > 0 && Math.floor(f.invulnTimer * 18) % 2 === 0) {
-    ctx.globalAlpha = 0.55;
-  }
-
   if (f.grounded) {
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.32)';
     ctx.beginPath();
     ctx.ellipse(f.x, f.y + 2, f.width * 0.44, 7, 0, 0, Math.PI * 2);
     ctx.fill();
   }
 
   if (f.slowTimer > 0 && f.grounded) {
-    ctx.fillStyle = 'rgba(245, 158, 11, 0.6)';
+    ctx.fillStyle = 'rgba(245, 158, 11, 0.65)';
     ctx.beginPath();
     ctx.ellipse(f.x, f.y + 1, f.width * 0.48, 8, 0, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  const tagLabel = f.slot === 0 ? 'P1' : f.isAi ? 'CPU' : 'P2';
-  const tagColor = f.slot === 0 ? '#FBBF24' : '#38BDF8';
-  ctx.save();
-  ctx.font = '700 12px "JetBrains Mono", monospace';
-  ctx.textAlign = 'center';
-  ctx.fillStyle = tagColor;
-  ctx.strokeStyle = 'rgba(15, 23, 42, 0.85)';
-  ctx.lineWidth = 3;
-  ctx.strokeText(tagLabel, f.x, f.y - f.height - 26);
-  ctx.fillText(tagLabel, f.x, f.y - f.height - 26);
-  ctx.restore();
-
   if (f.animState === 'victory') {
     const specColor = FIGHTER_SPECS[f.id].accentColor;
     const pulse = 0.85 + Math.sin(time * 5) * 0.15;
     ctx.save();
-    const beamGrad = ctx.createLinearGradient(f.x, f.y - 260, f.x, f.y + 8);
-    beamGrad.addColorStop(0, 'rgba(255, 255, 255, 0)');
-    beamGrad.addColorStop(0.55, `${specColor}22`);
-    beamGrad.addColorStop(1, `${specColor}55`);
-    ctx.fillStyle = beamGrad;
+    ctx.fillStyle = `${specColor}33`;
     ctx.beginPath();
     ctx.moveTo(f.x - 32, f.y - 260);
     ctx.lineTo(f.x + 32, f.y - 260);
@@ -1804,8 +2140,8 @@ function drawFighter(ctx: CanvasRenderingContext2D, f: FighterEntity, time: numb
     ctx.fill();
 
     ctx.strokeStyle = specColor;
-    ctx.lineWidth = 2.5;
-    ctx.globalAlpha = 0.75;
+    ctx.lineWidth = 3;
+    ctx.globalAlpha = 0.8;
     ctx.beginPath();
     ctx.ellipse(f.x, f.y + 2, f.width * 0.62 * pulse, 9, 0, 0, Math.PI * 2);
     ctx.stroke();
@@ -1815,59 +2151,72 @@ function drawFighter(ctx: CanvasRenderingContext2D, f: FighterEntity, time: numb
   if (f.animState === 'taunt') {
     const p = f.animDuration > 0 ? Math.min(1, f.animTimer / f.animDuration) : 0;
     const specColor = FIGHTER_SPECS[f.id].accentColor;
-
     ctx.save();
     ctx.strokeStyle = specColor;
-    ctx.lineWidth = 2;
-    ctx.globalAlpha = Math.sin(p * Math.PI) * 0.75;
+    ctx.lineWidth = 2.5;
+    ctx.globalAlpha = Math.sin(p * Math.PI) * 0.8;
     ctx.beginPath();
     ctx.ellipse(f.x, f.y + 1, f.width * (0.45 + p * 0.25), 7, 0, 0, Math.PI * 2);
     ctx.stroke();
-
-    if (p >= 0.34) {
-      const pop = Math.min(1, (p - 0.34) / 0.66);
-      ctx.globalAlpha = 1 - pop * 0.65;
-      ctx.font = '800 11px "JetBrains Mono", monospace';
-      ctx.textAlign = 'center';
-      ctx.fillStyle = '#FBBF24';
-      ctx.strokeStyle = 'rgba(15, 23, 42, 0.9)';
-      ctx.lineWidth = 3;
-      const floatY = f.y - f.height - 42 - pop * 18;
-      ctx.strokeText('ULT +9%', f.x, floatY);
-      ctx.fillText('ULT +9%', f.x, floatY);
-    }
     ctx.restore();
   }
 
-  ctx.translate(f.x, f.y);
+  ctx.restore();
+}
+
+function drawFighter(
+  stageCtx: CanvasRenderingContext2D,
+  f: FighterEntity,
+  time: number,
+  shakePxX = 0,
+  shakePxY = 0
+): void {
+  const scratch = getSpriteSurface();
+  if (!scratch) return;
+
+  const sCtx = scratch.ctx;
+  sCtx.clearRect(0, 0, SPRITE_SCRATCH_SIZE, SPRITE_SCRATCH_SIZE);
+  sCtx.save();
+  sCtx.translate(SPRITE_ANCHOR_X, SPRITE_ANCHOR_Y);
+
   const stunWobble = f.stunTimer > 0 ? Math.sin(time * 28) * 3 : 0;
-  ctx.translate(stunWobble, 0);
-  ctx.scale(f.facing * f.squashX, f.squashY);
+  sCtx.translate(stunWobble * WORLD_TO_PIXEL, 0);
+  sCtx.scale(WORLD_TO_PIXEL * f.facing * f.squashX, WORLD_TO_PIXEL * f.squashY);
 
   if (f.animState === 'hitstun') {
-    ctx.rotate(-0.22);
+    sCtx.rotate(-0.22);
   } else if (f.animState === 'stunned') {
-    ctx.rotate(Math.sin(time * 12) * 0.1);
+    sCtx.rotate(Math.sin(time * 12) * 0.1);
   } else if (f.animState === 'run') {
-    ctx.rotate(0.08);
+    sCtx.rotate(0.08);
   }
 
-  drawFighterRigById(ctx, f, time);
+  drawFighterRigById(sCtx, f, time);
+  sCtx.restore();
 
-  if (f.poisonTimer > 0 && Math.sin(time * 10) > 0) {
-    ctx.globalCompositeOperation = 'source-atop';
-    ctx.fillStyle = 'rgba(168, 85, 247, 0.35)';
-    ctx.fillRect(-100, -140, 200, 160);
+  applyPixelSpriteOutline(scratch, {
+    hitFlash: f.hitFlashTimer > 0,
+    poisoned: f.poisonTimer > 0 && Math.sin(time * 10) > 0,
+    alphaThreshold: 72,
+  });
+
+  const destX = Math.round(f.x * WORLD_TO_PIXEL + shakePxX - SPRITE_ANCHOR_X);
+  const destY = Math.round(f.y * WORLD_TO_PIXEL + shakePxY - SPRITE_ANCHOR_Y);
+
+  stageCtx.save();
+  if (f.invulnTimer > 0 && Math.floor(f.invulnTimer * 18) % 2 === 0) {
+    stageCtx.globalAlpha = 0.55;
   }
+  stageCtx.imageSmoothingEnabled = false;
+  stageCtx.drawImage(scratch.canvas, destX, destY);
+  stageCtx.restore();
+}
 
-  if (f.hitFlashTimer > 0) {
-    ctx.globalCompositeOperation = 'source-atop';
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.78)';
-    ctx.fillRect(-100, -140, 200, 160);
-  }
-
-  ctx.restore();
-
+function drawFighterStatusAuras(
+  ctx: CanvasRenderingContext2D,
+  f: FighterEntity,
+  time: number
+): void {
   if (f.stunTimer > 0) {
     ctx.save();
     for (let i = 0; i < 3; i++) {
@@ -1876,11 +2225,9 @@ function drawFighter(ctx: CanvasRenderingContext2D, f: FighterEntity, time: numb
       const sy = f.y - f.height - 8 + Math.sin(ang) * 7;
       ctx.fillStyle = i % 2 === 0 ? '#FACC15' : '#38BDF8';
       ctx.strokeStyle = INK;
-      ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      ctx.arc(sx, sy, 5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
+      ctx.lineWidth = 2.5;
+      ctx.fillRect(sx - 5, sy - 5, 10, 10);
+      ctx.strokeRect(sx - 5, sy - 5, 10, 10);
     }
     ctx.restore();
   }
@@ -1893,11 +2240,9 @@ function drawFighter(ctx: CanvasRenderingContext2D, f: FighterEntity, time: numb
       const cy = f.y - f.height - 14 + Math.sin(ang) * 6;
       ctx.fillStyle = i === 0 ? '#10B981' : '#F43F5E';
       ctx.strokeStyle = INK;
-      ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      ctx.rect(cx - 4.5, cy - 4.5, 9, 9);
-      ctx.fill();
-      ctx.stroke();
+      ctx.lineWidth = 2.5;
+      ctx.fillRect(cx - 5, cy - 5, 10, 10);
+      ctx.strokeRect(cx - 5, cy - 5, 10, 10);
     }
     ctx.restore();
   }
@@ -1907,12 +2252,12 @@ function drawFighter(ctx: CanvasRenderingContext2D, f: FighterEntity, time: numb
     const cy = f.y - f.height * 0.5;
     const pulse = 0.85 + Math.sin(time * 24) * 0.15;
     ctx.strokeStyle = '#EF4444';
-    ctx.lineWidth = 3.2;
+    ctx.lineWidth = 3.5;
     ctx.beginPath();
     ctx.arc(f.x, cy, f.width * 0.68 * pulse, 0, Math.PI * 2);
     ctx.stroke();
     ctx.strokeStyle = '#FFFFFF';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2.5;
     ctx.setLineDash([8, 6]);
     ctx.beginPath();
     ctx.arc(f.x, cy, f.width * 0.78, time * 5, time * 5 + Math.PI * 2);
@@ -1924,15 +2269,15 @@ function drawFighter(ctx: CanvasRenderingContext2D, f: FighterEntity, time: numb
     ctx.save();
     const cy = f.y - f.height * 0.5;
     const r = Math.max(f.width, f.height) * 0.66;
-    ctx.fillStyle = 'rgba(34, 197, 94, 0.2)';
+    ctx.fillStyle = 'rgba(34, 197, 94, 0.22)';
     ctx.strokeStyle = '#A3E635';
-    ctx.lineWidth = 3.2;
+    ctx.lineWidth = 3.5;
     ctx.beginPath();
     ctx.arc(f.x, cy, r, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
-    ctx.strokeStyle = 'rgba(163, 230, 53, 0.65)';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(163, 230, 53, 0.7)';
+    ctx.lineWidth = 2.5;
     drawHexagon(ctx, f.x, cy, r * 0.82);
     ctx.restore();
   }
@@ -1940,12 +2285,44 @@ function drawFighter(ctx: CanvasRenderingContext2D, f: FighterEntity, time: numb
   if (f.speedBoostTimer > 0) {
     ctx.save();
     const cy = f.y - f.height * 0.5;
-    ctx.strokeStyle = 'rgba(253, 224, 71, 0.75)';
-    ctx.lineWidth = 2.4;
+    ctx.strokeStyle = 'rgba(253, 224, 71, 0.8)';
+    ctx.lineWidth = 2.8;
     ctx.beginPath();
     ctx.ellipse(f.x, cy, f.width * 0.68, f.height * 0.58, time * 2, 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
+  }
+}
+
+function drawFighterPixelTags(
+  stageCtx: CanvasRenderingContext2D,
+  f: FighterEntity,
+  shakePxX: number,
+  shakePxY: number
+): void {
+  const tagLabel = f.slot === 0 ? 'P1' : f.isAi ? 'CPU' : 'P2';
+  const tagColor = f.slot === 0 ? '#FBBF24' : '#38BDF8';
+  const px = f.x * WORLD_TO_PIXEL + shakePxX;
+  const py = (f.y - f.height - 26) * WORLD_TO_PIXEL + shakePxY;
+  drawPixelLabel(stageCtx, tagLabel, px, py, tagColor, '700 8px "JetBrains Mono", monospace');
+
+  if (f.animState === 'taunt') {
+    const p = f.animDuration > 0 ? Math.min(1, f.animTimer / f.animDuration) : 0;
+    if (p >= 0.34) {
+      const pop = Math.min(1, (p - 0.34) / 0.66);
+      stageCtx.save();
+      stageCtx.globalAlpha = 1 - pop * 0.65;
+      const floatY = (f.y - f.height - 44 - pop * 18) * WORLD_TO_PIXEL + shakePxY;
+      drawPixelLabel(
+        stageCtx,
+        'ULT +9%',
+        px,
+        floatY,
+        '#FBBF24',
+        '800 7px "JetBrains Mono", monospace'
+      );
+      stageCtx.restore();
+    }
   }
 }
 
@@ -4030,9 +4407,35 @@ function drawSlashEffect(ctx: CanvasRenderingContext2D, s: SlashEffect): void {
   ctx.restore();
 }
 
+function drawPixelProjectile(
+  stageCtx: CanvasRenderingContext2D,
+  p: ProjectileEntity,
+  shakePxX = 0,
+  shakePxY = 0
+): void {
+  const scratch = getProjSurface();
+  if (!scratch) return;
+  const pCtx = scratch.ctx;
+  const half = PROJ_SCRATCH_SIZE * 0.5;
+  pCtx.clearRect(0, 0, PROJ_SCRATCH_SIZE, PROJ_SCRATCH_SIZE);
+  pCtx.save();
+  pCtx.translate(half, half);
+  pCtx.scale(WORLD_TO_PIXEL, WORLD_TO_PIXEL);
+  drawProjectile(pCtx, p);
+  pCtx.restore();
+
+  applyPixelSpriteOutline(scratch, { alphaThreshold: 64 });
+
+  const destX = Math.round(p.x * WORLD_TO_PIXEL + shakePxX - half);
+  const destY = Math.round(p.y * WORLD_TO_PIXEL + shakePxY - half);
+  stageCtx.save();
+  stageCtx.imageSmoothingEnabled = false;
+  stageCtx.drawImage(scratch.canvas, destX, destY);
+  stageCtx.restore();
+}
+
 function drawProjectile(ctx: CanvasRenderingContext2D, p: ProjectileEntity): void {
   ctx.save();
-  ctx.translate(p.x, p.y);
   ctx.rotate(p.rotation);
 
   if (p.kind === 'venom_honey_drop') {
@@ -4117,7 +4520,7 @@ function drawProjectile(ctx: CanvasRenderingContext2D, p: ProjectileEntity): voi
     ctx.arc(-p.radius * 0.2, -p.radius * 0.2, p.radius * 0.52, 0, Math.PI * 2);
     ctx.fill();
   } else if (p.kind === 'bubble_orb') {
-    ctx.fillStyle = 'rgba(6, 182, 212, 0.45)';
+    ctx.fillStyle = 'rgba(6, 182, 212, 0.65)';
     ctx.strokeStyle = '#CFFAFE';
     ctx.lineWidth = 2.6;
     ctx.beginPath();
@@ -4183,188 +4586,19 @@ function drawProjectile(ctx: CanvasRenderingContext2D, p: ProjectileEntity): voi
   ctx.restore();
 }
 
-export function renderWinnersPodiumStage(
-  ctx: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-  winnerId: FighterId,
-  winnerSlot: 0 | 1,
+function buildPreviewFighterEntity(
+  id: FighterId,
+  slot: 0 | 1,
+  animState: FighterEntity['animState'],
   time: number
-): void {
-  const spec = FIGHTER_SPECS[winnerId];
-  const accent = spec.accentColor;
-
-  ctx.clearRect(0, 0, width, height);
-
-  // Dark stage backdrop with subtle radial spotlight
-  const bg = ctx.createRadialGradient(
-    width * 0.5,
-    height * 0.42,
-    18,
-    width * 0.5,
-    height * 0.55,
-    width * 0.68
-  );
-  bg.addColorStop(0, '#1E293B');
-  bg.addColorStop(0.65, '#0F172A');
-  bg.addColorStop(1, '#020617');
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, width, height);
-
-  const cx = width * 0.5;
-  const podiumTopY = height - 62;
-  const podiumWidth = 152;
-  const podiumHeight = 50;
-
-  // Overhead championship spotlight beam
-  const pulse = 0.92 + Math.sin(time * 4.2) * 0.08;
-  const beam = ctx.createLinearGradient(cx, 0, cx, podiumTopY + 6);
-  beam.addColorStop(0, `${accent}00`);
-  beam.addColorStop(0.35, `${accent}1A`);
-  beam.addColorStop(1, `${accent}44`);
-  ctx.fillStyle = beam;
-  ctx.beginPath();
-  ctx.moveTo(cx - 42, 0);
-  ctx.lineTo(cx + 42, 0);
-  ctx.lineTo(cx + 98 * pulse, podiumTopY + 4);
-  ctx.lineTo(cx - 98 * pulse, podiumTopY + 4);
-  ctx.closePath();
-  ctx.fill();
-
-  // Fighter-specific animated aura behind the podium figure
-  ctx.save();
-  if (winnerId === 'honey_shell') {
-    for (let i = 0; i < 6; i++) {
-      const a = time * 1.4 + (i * Math.PI) / 3;
-      const rx = cx + Math.cos(a) * 68;
-      const ry = podiumTopY - 58 + Math.sin(a * 1.3) * 26;
-      ctx.fillStyle = i % 2 === 0 ? 'rgba(251, 191, 36, 0.45)' : 'rgba(253, 230, 138, 0.35)';
-      ctx.beginPath();
-      for (let k = 0; k < 6; k++) {
-        const ha = (k * Math.PI) / 3;
-        const px = rx + Math.cos(ha) * 7;
-        const py = ry + Math.sin(ha) * 7;
-        if (k === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      }
-      ctx.closePath();
-      ctx.fill();
-    }
-  } else if (winnerId === 'cloudier') {
-    ctx.strokeStyle = 'rgba(56, 189, 248, 0.42)';
-    ctx.lineWidth = 2;
-    for (let i = 0; i < 3; i++) {
-      const lift = ((time * 28 + i * 26) % 78);
-      ctx.globalAlpha = Math.max(0, 1 - lift / 78) * 0.65;
-      ctx.beginPath();
-      ctx.ellipse(cx, podiumTopY - 14 - lift, 54 + lift * 0.25, 11, 0, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-  } else if (winnerId === 'eve') {
-    ctx.translate(cx, podiumTopY - 56);
-    ctx.rotate(time * 0.9);
-    ctx.strokeStyle = 'rgba(250, 250, 250, 0.42)';
-    ctx.lineWidth = 2.4;
-    ctx.beginPath();
-    ctx.arc(0, 0, 62, 0, Math.PI);
-    ctx.stroke();
-    ctx.strokeStyle = 'rgba(24, 24, 27, 0.85)';
-    ctx.beginPath();
-    ctx.arc(0, 0, 62, Math.PI, Math.PI * 2);
-    ctx.stroke();
-  } else if (winnerId === 'marshal_bolt') {
-    const redOn = Math.floor(time * 8) % 2 === 0;
-    ctx.fillStyle = redOn ? 'rgba(244, 63, 94, 0.25)' : 'rgba(59, 130, 246, 0.25)';
-    ctx.beginPath();
-    ctx.arc(cx, podiumTopY - 72, 74, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#FBBF24';
-    for (let i = 0; i < 6; i++) {
-      const a = time * 1.5 + (i * Math.PI) / 3;
-      const sx = cx + Math.cos(a) * 68;
-      const sy = podiumTopY - 56 + Math.sin(a) * 28;
-      ctx.beginPath();
-      ctx.arc(sx, sy, 3.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  } else if (winnerId === 'spidra') {
-    for (let i = 0; i < 8; i++) {
-      const p = ((time * 1.1 + i * 0.13) % 1);
-      const sx = cx + Math.sin(i * 2.7) * 74;
-      const sy = podiumTopY - 12 - p * 98;
-      ctx.fillStyle = i % 2 === 0 ? '#10B981' : '#F43F5E';
-      ctx.globalAlpha = (1 - p) * 0.8;
-      ctx.fillRect(sx - 3, sy - 3, 6, 6);
-    }
-  } else {
-    const primary = FIGHTER_SPECS[winnerId].accentColor;
-    const secondary = FIGHTER_SPECS[winnerId].secondaryColor;
-    for (let i = 0; i < 8; i++) {
-      const a = time * 1.6 + (i * Math.PI) / 4;
-      const rx = cx + Math.cos(a) * 66;
-      const ry = podiumTopY - 56 + Math.sin(a * 1.4) * 28;
-      ctx.fillStyle = i % 2 === 0 ? primary : secondary;
-      ctx.globalAlpha = 0.65;
-      ctx.beginPath();
-      ctx.arc(rx, ry, 4.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-  ctx.restore();
-
-  // Flanking lower step accents for authentic championship podium silhouette
-  ctx.save();
-  ctx.fillStyle = '#0F172A';
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.roundRect(cx - podiumWidth * 0.5 - 66, podiumTopY + 24, 68, 28, [6, 0, 0, 4]);
-  ctx.roundRect(cx + podiumWidth * 0.5 - 2, podiumTopY + 30, 68, 22, [0, 6, 4, 0]);
-  ctx.fill();
-  ctx.stroke();
-
-  // 1st-Place Winner's Podium Pedestal
-  const pedGrad = ctx.createLinearGradient(0, podiumTopY, 0, podiumTopY + podiumHeight);
-  pedGrad.addColorStop(0, '#334155');
-  pedGrad.addColorStop(1, '#0F172A');
-  ctx.fillStyle = pedGrad;
-  ctx.strokeStyle = '#FBBF24';
-  ctx.lineWidth = 2.5;
-  ctx.beginPath();
-  ctx.roundRect(cx - podiumWidth * 0.5, podiumTopY, podiumWidth, podiumHeight, [8, 8, 4, 4]);
-  ctx.fill();
-  ctx.stroke();
-
-  // Top gold trim bar
-  ctx.fillStyle = '#FBBF24';
-  ctx.beginPath();
-  ctx.roundRect(cx - podiumWidth * 0.5 - 4, podiumTopY - 5, podiumWidth + 8, 9, 4);
-  ctx.fill();
-  ctx.strokeStyle = INK;
-  ctx.lineWidth = 1.6;
-  ctx.stroke();
-
-  // Engraved 1ST emblem on podium front
-  ctx.fillStyle = '#FDE68A';
-  ctx.font = '800 18px "Bricolage Grotesque", sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('1ST', cx, podiumTopY + podiumHeight * 0.54);
-  ctx.restore();
-
-  // Floor contact shadow on top of podium
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.42)';
-  ctx.beginPath();
-  ctx.ellipse(cx, podiumTopY - 4, 40, 6, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Winning fighter standing on the 1st-place pedestal performing their unique victory animation
-  const podiumFighter: FighterEntity = {
-    slot: winnerSlot,
-    id: winnerId,
+): FighterEntity {
+  const spec = FIGHTER_SPECS[id];
+  return {
+    slot,
+    id,
     isAi: false,
-    x: cx,
-    y: podiumTopY - 5,
+    x: 0,
+    y: 0,
     vx: 0,
     vy: 0,
     width: spec.width,
@@ -4382,7 +4616,7 @@ export function renderWinnersPodiumStage(
     ultCharge: 100,
     damageDealt: 0,
     koCount: 0,
-    animState: 'victory',
+    animState,
     animTimer: time,
     animDuration: 1.1,
     comboStep: 0,
@@ -4407,10 +4641,179 @@ export function renderWinnersPodiumStage(
     aiDecisionTimer: 0,
     aiDesiredAction: 'approach',
   };
+}
+
+export function renderPixelFighterPortrait(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  fighterId: FighterId,
+  time = 0
+): void {
+  const portrait = getPortraitSurface();
+  if (!portrait) return;
+
+  const pCtx = portrait.ctx;
+  pCtx.clearRect(0, 0, PORTRAIT_PIXEL_SIZE, PORTRAIT_PIXEL_SIZE);
+  pCtx.save();
+  pCtx.translate(Math.round(PORTRAIT_PIXEL_SIZE * 0.5), PORTRAIT_PIXEL_SIZE - 4);
+  pCtx.scale(0.46, 0.46);
+  const preview = buildPreviewFighterEntity(fighterId, 0, 'idle', time);
+  drawFighterRigById(pCtx, preview, time);
+  pCtx.restore();
+
+  applyPixelSpriteOutline(portrait, { alphaThreshold: 68 });
 
   ctx.save();
-  ctx.translate(cx, podiumTopY - 5);
-  ctx.scale(1.36, 1.36);
-  drawFighterRigById(ctx, podiumFighter, time);
+  ctx.clearRect(0, 0, width, height);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(portrait.canvas, 0, 0, width, height);
+  ctx.restore();
+}
+
+export function renderWinnersPodiumStage(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  winnerId: FighterId,
+  winnerSlot: 0 | 1,
+  time: number
+): void {
+  const podium = getPodiumSurface();
+  const sprite = getSpriteSurface();
+  if (!podium || !sprite) return;
+
+  const pCtx = podium.ctx;
+  const spec = FIGHTER_SPECS[winnerId];
+  const accent = spec.accentColor;
+
+  pCtx.imageSmoothingEnabled = false;
+  drawSteppedPixelSky(
+    pCtx,
+    PODIUM_PIXEL_WIDTH,
+    PODIUM_PIXEL_HEIGHT,
+    '#020617',
+    '#0F172A',
+    '#1E293B'
+  );
+
+  const cx = Math.round(PODIUM_PIXEL_WIDTH * 0.5);
+  const podiumTopY = PODIUM_PIXEL_HEIGHT - 31;
+  const podiumWidth = 76;
+  const podiumHeight = 25;
+
+  // Overhead stepped pixel championship spotlight beam
+  const pulse = 0.92 + Math.sin(time * 4.2) * 0.08;
+  pCtx.fillStyle = `${accent}33`;
+  pCtx.beginPath();
+  pCtx.moveTo(cx - 21, 0);
+  pCtx.lineTo(cx + 21, 0);
+  pCtx.lineTo(Math.round(cx + 49 * pulse), podiumTopY + 2);
+  pCtx.lineTo(Math.round(cx - 49 * pulse), podiumTopY + 2);
+  pCtx.closePath();
+  pCtx.fill();
+
+  // Fighter-specific pixel aura
+  pCtx.save();
+  if (winnerId === 'honey_shell') {
+    for (let i = 0; i < 6; i++) {
+      const a = time * 1.4 + (i * Math.PI) / 3;
+      const rx = Math.round(cx + Math.cos(a) * 34);
+      const ry = Math.round(podiumTopY - 29 + Math.sin(a * 1.3) * 13);
+      pCtx.fillStyle = i % 2 === 0 ? '#FBBF24' : '#FDE68A';
+      pCtx.fillRect(rx - 2, ry - 2, 4, 4);
+    }
+  } else if (winnerId === 'cloudier') {
+    pCtx.strokeStyle = '#38BDF8';
+    pCtx.lineWidth = 1;
+    for (let i = 0; i < 3; i++) {
+      const lift = (time * 14 + i * 13) % 39;
+      pCtx.globalAlpha = Math.max(0, 1 - lift / 39) * 0.7;
+      pCtx.strokeRect(
+        Math.round(cx - 27 - lift * 0.12),
+        Math.round(podiumTopY - 7 - lift),
+        Math.round(54 + lift * 0.24),
+        4
+      );
+    }
+  } else if (winnerId === 'eve') {
+    pCtx.strokeStyle = '#FAFAFA';
+    pCtx.lineWidth = 1.5;
+    pCtx.beginPath();
+    pCtx.arc(cx, podiumTopY - 28, 30, time, time + Math.PI);
+    pCtx.stroke();
+    pCtx.strokeStyle = '#27272A';
+    pCtx.beginPath();
+    pCtx.arc(cx, podiumTopY - 28, 30, time + Math.PI, time + Math.PI * 2);
+    pCtx.stroke();
+  } else {
+    const secondary = FIGHTER_SPECS[winnerId].secondaryColor;
+    for (let i = 0; i < 8; i++) {
+      const a = time * 1.6 + (i * Math.PI) / 4;
+      const rx = Math.round(cx + Math.cos(a) * 33);
+      const ry = Math.round(podiumTopY - 28 + Math.sin(a * 1.4) * 14);
+      pCtx.fillStyle = i % 2 === 0 ? accent : secondary;
+      pCtx.fillRect(rx - 1, ry - 1, 3, 3);
+    }
+  }
+  pCtx.restore();
+
+  // Flanking lower step accents
+  pCtx.fillStyle = '#0F172A';
+  pCtx.fillRect(cx - 38 - 33, podiumTopY + 12, 34, 14);
+  pCtx.fillRect(cx + 38 - 1, podiumTopY + 15, 34, 11);
+  pCtx.strokeStyle = '#334155';
+  pCtx.lineWidth = 1;
+  pCtx.strokeRect(cx - 38 - 33, podiumTopY + 12, 34, 14);
+  pCtx.strokeRect(cx + 38 - 1, podiumTopY + 15, 34, 11);
+
+  // 1st-Place Pixel Pedestal
+  pCtx.fillStyle = '#1E293B';
+  pCtx.fillRect(cx - 38, podiumTopY, podiumWidth, podiumHeight);
+  pCtx.fillStyle = '#334155';
+  pCtx.fillRect(cx - 38, podiumTopY, podiumWidth, 10);
+  pCtx.strokeStyle = '#FBBF24';
+  pCtx.lineWidth = 1;
+  pCtx.strokeRect(cx - 38, podiumTopY, podiumWidth, podiumHeight);
+
+  // Top gold trim bar with #141418 pixel border
+  pCtx.fillStyle = '#FBBF24';
+  pCtx.fillRect(cx - 40, podiumTopY - 3, podiumWidth + 4, 5);
+  pCtx.strokeStyle = '#141418';
+  pCtx.strokeRect(cx - 40, podiumTopY - 3, podiumWidth + 4, 5);
+
+  quantizePixelStage(pCtx, PODIUM_PIXEL_WIDTH, PODIUM_PIXEL_HEIGHT);
+
+  // Floor shadow on pedestal
+  pCtx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+  pCtx.fillRect(cx - 18, podiumTopY - 4, 36, 2);
+
+  // Crisp pixel-art champion sprite
+  const sCtx = sprite.ctx;
+  sCtx.clearRect(0, 0, SPRITE_SCRATCH_SIZE, SPRITE_SCRATCH_SIZE);
+  sCtx.save();
+  sCtx.translate(SPRITE_ANCHOR_X, SPRITE_ANCHOR_Y);
+  sCtx.scale(0.68, 0.68);
+  const podiumFighter = buildPreviewFighterEntity(winnerId, winnerSlot, 'victory', time);
+  drawFighterRigById(sCtx, podiumFighter, time);
+  sCtx.restore();
+
+  applyPixelSpriteOutline(sprite, { alphaThreshold: 72 });
+  pCtx.drawImage(sprite.canvas, cx - SPRITE_ANCHOR_X, podiumTopY - 3 - SPRITE_ANCHOR_Y);
+
+  // Crisp pixel 1ST label
+  drawPixelLabel(
+    pCtx,
+    '1ST',
+    cx,
+    podiumTopY + 16,
+    '#FDE68A',
+    '800 9px "JetBrains Mono", monospace'
+  );
+
+  ctx.save();
+  ctx.clearRect(0, 0, width, height);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(podium.canvas, 0, 0, width, height);
   ctx.restore();
 }

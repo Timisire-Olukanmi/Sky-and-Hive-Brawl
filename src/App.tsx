@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Volume2, VolumeX, Pause, Play, RotateCcw, Film, FastForward, ArrowLeft, Trophy, Shuffle } from 'lucide-react';
+import { Volume2, VolumeX, Pause, Play, RotateCcw, Film, FastForward, ArrowLeft, Trophy, Shuffle, Home } from 'lucide-react';
 import {
   AIR_DRAG,
   BLAST_ZONE,
@@ -19,7 +19,9 @@ import { soundSynth } from './game/audio';
 import { renderGameFrame, renderWinnersPodiumStage } from './game/renderer';
 import { AccountBar } from './components/AccountBar';
 import { AuthModal } from './components/AuthModal';
+import { HomeScreen } from './components/HomeScreen';
 import { PersistentScoreboard } from './components/PersistentScoreboard';
+import { PixelFighterPortrait } from './components/PixelFighterPortrait';
 import { ProfileModal } from './components/ProfileModal';
 import { useFirebase } from './contexts/FirebaseContext';
 import { usePersistentScoreboard } from './hooks/usePersistentScoreboard';
@@ -411,7 +413,7 @@ export default function App() {
   const matchRecordedRef = useRef<boolean>(false);
 
   const engineRef = useRef<GameEngineState>(
-    createInitialEngineState('TITLE_MENU', '1P_AI', 'hive_canopy', 'honey_shell', 'spidra')
+    createInitialEngineState('HOME', '1P_AI', 'hive_canopy', 'honey_shell', 'spidra')
   );
 
   const heldKeysRef = useRef<Set<string>>(new Set());
@@ -687,6 +689,42 @@ export default function App() {
     }
   }, [syncHudImmediate]);
 
+  const enterArenaSetup = useCallback(() => {
+    soundSynth.playUiClick();
+    matchRecordedRef.current = false;
+    replayFramesRef.current = [];
+    replayPlayingRef.current = false;
+    setReplayAvailable(false);
+    const previewMap: MapId =
+      selectedMap === 'random' ? engineRef.current.mapId : selectedMap;
+    engineRef.current = createInitialEngineState(
+      'TITLE_MENU',
+      selectedMode,
+      previewMap,
+      p1Fighter,
+      p2Fighter
+    );
+    syncHudImmediate();
+  }, [p1Fighter, p2Fighter, selectedMap, selectedMode, syncHudImmediate]);
+
+  const returnToHome = useCallback(() => {
+    soundSynth.playUiClick();
+    matchRecordedRef.current = false;
+    replayFramesRef.current = [];
+    replayPlayingRef.current = false;
+    setReplayAvailable(false);
+    const previewMap: MapId =
+      selectedMap === 'random' ? engineRef.current.mapId : selectedMap;
+    engineRef.current = createInitialEngineState(
+      'HOME',
+      selectedMode,
+      previewMap,
+      p1Fighter,
+      p2Fighter
+    );
+    syncHudImmediate();
+  }, [p1Fighter, p2Fighter, selectedMap, selectedMode, syncHudImmediate]);
+
   const returnToTitle = useCallback(() => {
     soundSynth.playUiClick();
     matchRecordedRef.current = false;
@@ -716,7 +754,7 @@ export default function App() {
 
   useEffect(() => {
     const engine = engineRef.current;
-    if (engine.phase === 'TITLE_MENU') {
+    if (engine.phase === 'HOME' || engine.phase === 'TITLE_MENU') {
       const previewMap: MapId =
         selectedMap === 'random' ? engine.mapId : selectedMap;
       engine.mode = selectedMode;
@@ -3981,7 +4019,7 @@ export default function App() {
       const state = engineRef.current;
       state.ambientTime += dt;
 
-      if (state.phase === 'TITLE_MENU') {
+      if (state.phase === 'HOME' || state.phase === 'TITLE_MENU') {
         stepAttractDemo(dt);
       } else if (state.phase === 'PLAYING') {
         state.matchTime += dt;
@@ -4101,8 +4139,8 @@ export default function App() {
       ref={containerRef}
       className="relative w-screen h-[100dvh] overflow-hidden bg-slate-950 select-none"
     >
-      {/* Isolated 60fps HTML5 Canvas Engine Surface */}
-      <canvas ref={canvasRef} className="block w-full h-full" />
+      {/* Isolated 60fps HTML5 Pixel Canvas Engine Surface */}
+      <canvas ref={canvasRef} className="block w-full h-full pixelated" />
 
       {/* Top-Right Utility Controls */}
       <div className="absolute top-4 right-4 z-30 flex items-center gap-2">
@@ -4291,61 +4329,78 @@ export default function App() {
         </div>
       )}
 
-      {/* Title Screen Shell */}
+      {/* Token Wars Dark Home Screen with Sign Up & Login */}
+      {hud.phase === 'HOME' && (
+        <HomeScreen
+          scoreboard={scoreboard}
+          selectedMode={selectedMode}
+          selectedMap={selectedMap}
+          p1Fighter={p1Fighter}
+          p2Fighter={p2Fighter}
+          onEnterArenaSetup={enterArenaSetup}
+          onQuickBattle={startMatch}
+          onOpenProfileModal={() => setProfileModalOpen(true)}
+          onOpenUpgradeModal={() => {
+            setAuthModalMode('upgrade');
+            setAuthModalOpen(true);
+          }}
+          onUiClick={() => soundSynth.playUiClick()}
+        />
+      )}
+
+      {/* Arena Setup Screen Shell */}
       {hud.phase === 'TITLE_MENU' && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-between gap-3 overflow-y-auto px-4 sm:px-6 py-4 sm:py-6 bg-gradient-to-b from-slate-950/75 via-slate-950/35 to-slate-950/85">
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-between gap-3 overflow-y-auto px-4 sm:px-6 py-4 sm:py-6 bg-gradient-to-b from-slate-950/78 via-slate-950/42 to-slate-950/88">
           <div className="flex flex-col items-center text-center shrink-0">
             <svg
-              viewBox="0 0 460 102"
-              className="w-[300px] sm:w-[420px] h-auto drop-shadow-[0_6px_18px_rgba(0,0,0,0.65)]"
+              viewBox="0 0 460 94"
+              className="w-[300px] sm:w-[420px] h-auto drop-shadow-[0_6px_0_rgba(2,6,23,0.9)]"
               role="img"
-              aria-label="Sky and Hive Brawl"
+              aria-label="Token Wars"
             >
               <defs>
                 <linearGradient id="titleGold" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stopColor="#FDE68A" />
-                  <stop offset="50%" stopColor="#F59E0B" />
+                  <stop offset="0%" stopColor="#FEF08A" />
+                  <stop offset="48%" stopColor="#F59E0B" />
                   <stop offset="100%" stopColor="#38BDF8" />
                 </linearGradient>
               </defs>
-              <polygon
-                points="32,26 48,17 64,26 64,44 48,53 32,44"
-                fill="#F59E0B"
-                stroke="#18181B"
-                strokeWidth="3"
-              />
-              <circle cx="412" cy="36" r="14" fill="#E0F2FE" stroke="#18181B" strokeWidth="3" />
-              <circle cx="426" cy="40" r="11" fill="#FFFFFF" stroke="#18181B" strokeWidth="3" />
+              <g shapeRendering="crispEdges">
+                <rect x="28" y="22" width="22" height="22" fill="#F59E0B" stroke="#141418" strokeWidth="3" />
+                <rect x="34" y="28" width="10" height="10" fill="#FEF08A" />
+                <rect x="410" y="22" width="22" height="22" fill="#0EA5E9" stroke="#141418" strokeWidth="3" />
+                <rect x="416" y="28" width="10" height="10" fill="#E0F2FE" />
+              </g>
               <text
                 x="230"
-                y="54"
+                y="50"
                 textAnchor="middle"
                 fill="url(#titleGold)"
-                stroke="#18181B"
-                strokeWidth="6"
+                stroke="#141418"
+                strokeWidth="7"
                 paintOrder="stroke"
                 style={{
                   fontFamily: 'Bricolage Grotesque, sans-serif',
                   fontWeight: 800,
                   fontSize: '40px',
-                  letterSpacing: '-0.02em',
+                  letterSpacing: '0.03em',
                 }}
               >
-                SKY &amp; HIVE BRAWL
+                TOKEN WARS
               </text>
               <text
                 x="230"
-                y="84"
+                y="78"
                 textAnchor="middle"
                 fill="#E2E8F0"
                 style={{
-                  fontFamily: 'Plus Jakarta Sans, sans-serif',
-                  fontWeight: 600,
-                  fontSize: '13px',
-                  letterSpacing: '0.08em',
+                  fontFamily: 'JetBrains Mono, monospace',
+                  fontWeight: 700,
+                  fontSize: '12px',
+                  letterSpacing: '0.09em',
                 }}
               >
-                10 FIGHTERS · 10 INTERACTIVE STAGES
+                10 PIXEL FIGHTERS · 10 INTERACTIVE STAGES
               </text>
             </svg>
           </div>
@@ -4493,13 +4548,23 @@ export default function App() {
               <span className="text-xs text-slate-400">
                 3 Attacks · Special · Up-Recovery (R / W+K) · Ultimate · Stage Obstacles
               </span>
-              <button
-                type="button"
-                onClick={startMatch}
-                className="w-full sm:w-auto px-7 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                Start Match
-              </button>
+              <div className="flex w-full sm:w-auto items-center gap-2">
+                <button
+                  type="button"
+                  onClick={returnToHome}
+                  className="px-4 py-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 font-semibold text-sm border border-white/15 flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <Home className="w-4 h-4 text-slate-400" aria-hidden="true" />
+                  <span>Home</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={startMatch}
+                  className="flex-1 sm:flex-initial px-7 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  Start Match
+                </button>
+              </div>
             </div>
           </div>
 
@@ -4538,7 +4603,14 @@ export default function App() {
                 onClick={returnToTitle}
                 className="w-full py-2.5 px-4 rounded-lg bg-transparent hover:bg-slate-800 text-slate-300 font-medium text-sm border border-white/10 transition-colors cursor-pointer"
               >
-                Title Screen
+                Arena Setup
+              </button>
+              <button
+                type="button"
+                onClick={returnToHome}
+                className="w-full py-2.5 px-4 rounded-lg bg-transparent hover:bg-slate-800 text-slate-400 hover:text-white font-medium text-sm border border-white/10 transition-colors cursor-pointer"
+              >
+                Token Wars Home
               </button>
             </div>
           </div>
@@ -4556,6 +4628,7 @@ export default function App() {
           onWatchReplay={startReplay}
           onRematch={rematchMatch}
           onReturnToTitle={returnToTitle}
+          onReturnToHome={returnToHome}
         />
       )}
 
@@ -4729,7 +4802,7 @@ function FighterSelectorColumn({
               }`}
             >
               <div className="flex items-center gap-1.5 min-w-0">
-                <FighterMiniIcon id={id} />
+                <PixelFighterPortrait id={id} size={22} />
                 <span className="font-display font-bold text-xs truncate">{spec.name}</span>
               </div>
               <div className="mt-0.5 flex items-center justify-between text-[9px] font-mono-num text-slate-400">
@@ -4754,107 +4827,6 @@ function FighterSelectorColumn({
   );
 }
 
-function FighterMiniIcon({ id }: { id: FighterId }) {
-  if (id === 'honey_shell') {
-    return (
-      <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" aria-hidden="true">
-        <polygon points="12,3 20,7.5 20,16.5 12,21 4,16.5 4,7.5" fill="#F59E0B" stroke="#18181B" strokeWidth="2" />
-        <circle cx="12" cy="12" r="3" fill="#FEF3C7" />
-      </svg>
-    );
-  }
-  if (id === 'cloudier') {
-    return (
-      <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" aria-hidden="true">
-        <circle cx="10" cy="13" r="6" fill="#E0F2FE" stroke="#18181B" strokeWidth="2" />
-        <circle cx="15" cy="14" r="5" fill="#FFFFFF" stroke="#18181B" strokeWidth="2" />
-      </svg>
-    );
-  }
-  if (id === 'eve') {
-    return (
-      <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" aria-hidden="true">
-        <circle cx="12" cy="12" r="8" fill="#18181B" stroke="#FAFAFA" strokeWidth="2" />
-        <path d="M12 4 A8 8 0 0 0 12 20 Z" fill="#FAFAFA" />
-      </svg>
-    );
-  }
-  if (id === 'marshal_bolt') {
-    return (
-      <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" aria-hidden="true">
-        <circle cx="12" cy="4" r="2.2" fill="#F43F5E" />
-        <rect x="7" y="5.5" width="10" height="5" rx="1.5" fill="#1E293B" stroke="#FBBF24" strokeWidth="1.2" />
-        <path d="M3 10.5 Q12 8.5 21 10.5 Q12 12 3 10.5 Z" fill="#334155" stroke="#18181B" strokeWidth="1.2" />
-        <rect x="6.5" y="11.5" width="11" height="8" rx="2.5" fill="#1E3A8A" stroke="#818CF8" strokeWidth="1.5" />
-        <rect x="8.5" y="13.5" width="7" height="3.5" rx="1" fill="#09090B" />
-        <circle cx="10.5" cy="15.2" r="1" fill="#38BDF8" />
-        <circle cx="13.5" cy="15.2" r="1" fill="#38BDF8" />
-      </svg>
-    );
-  }
-  if (id === 'pyro_jack') {
-    return (
-      <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" aria-hidden="true">
-        <path d="M9 7 Q12 1 15 7" fill="#FACC15" stroke="#F97316" strokeWidth="1.6" />
-        <ellipse cx="12" cy="14" rx="8" ry="6.5" fill="#F97316" stroke="#18181B" strokeWidth="1.8" />
-        <polygon points="8,12 10.5,11 10,13.5" fill="#FEF08A" />
-        <polygon points="16,12 13.5,11 14,13.5" fill="#FEF08A" />
-        <path d="M8.5 16.5 Q12 19 15.5 16.5" stroke="#FEF08A" strokeWidth="1.8" fill="none" />
-      </svg>
-    );
-  }
-  if (id === 'aqua_nyx') {
-    return (
-      <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" aria-hidden="true">
-        <path d="M4 13 A8 8 0 0 1 20 13 Z" fill="#06B6D4" stroke="#18181B" strokeWidth="1.8" />
-        <circle cx="9.5" cy="9.5" r="1.4" fill="#F472B6" />
-        <circle cx="14.5" cy="9" r="1.2" fill="#CFFAFE" />
-        <path d="M7 14 Q6 18 8 21 M12 14 Q13 18 11.5 21 M17 14 Q18 18 16 21" stroke="#F472B6" strokeWidth="2" strokeLinecap="round" fill="none" />
-      </svg>
-    );
-  }
-  if (id === 'blade_zero') {
-    return (
-      <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" aria-hidden="true">
-        <path d="M7 6 L4 2 L10 5 Z M17 6 L20 2 L14 5 Z" fill="#EF4444" />
-        <rect x="6" y="6" width="12" height="12" rx="3" fill="#CBD5E1" stroke="#18181B" strokeWidth="1.8" />
-        <rect x="8" y="10" width="9" height="3.5" rx="1" fill="#09090B" />
-        <rect x="9.5" y="11" width="6" height="1.5" fill="#EF4444" />
-      </svg>
-    );
-  }
-  if (id === 'moss_golem') {
-    return (
-      <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" aria-hidden="true">
-        <rect x="4.5" y="6" width="15" height="14" rx="3.5" fill="#64748B" stroke="#18181B" strokeWidth="1.8" />
-        <path d="M5 8 Q9 3 12 6 Q15 3 19 8" fill="#22C55E" stroke="#18181B" strokeWidth="1.4" />
-        <circle cx="9.5" cy="12.5" r="1.6" fill="#A3E635" />
-        <circle cx="14.5" cy="12.5" r="1.6" fill="#A3E635" />
-      </svg>
-    );
-  }
-  if (id === 'astro_pip') {
-    return (
-      <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" aria-hidden="true">
-        <circle cx="12" cy="12.5" r="8" fill="#9333EA" fillOpacity="0.25" stroke="#E9D5FF" strokeWidth="1.8" />
-        <circle cx="12" cy="13" r="5" fill="#FDBA74" stroke="#18181B" strokeWidth="1.4" />
-        <circle cx="10.2" cy="12.3" r="1" fill="#18181B" />
-        <circle cx="13.8" cy="12.3" r="1" fill="#18181B" />
-        <circle cx="12" cy="2.5" r="1.5" fill="#FDE047" />
-      </svg>
-    );
-  }
-  return (
-    <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" aria-hidden="true">
-      <line x1="9" y1="6" x2="6" y2="2" stroke="#10B981" strokeWidth="2" strokeLinecap="round" />
-      <line x1="15" y1="6" x2="18" y2="2" stroke="#F43F5E" strokeWidth="2" strokeLinecap="round" />
-      <rect x="5" y="6" width="14" height="10" rx="2.5" fill="#334155" stroke="#10B981" strokeWidth="1.8" />
-      <rect x="7" y="8" width="10" height="6" rx="1" fill="#064E3B" />
-      <path d="M8 16 L4 21 M10 16 L8 21 M14 16 L16 21 M16 16 L20 21" stroke="#10B981" strokeWidth="1.8" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function WinnersPodiumOverlay({
   winner,
   runnerUp,
@@ -4864,6 +4836,7 @@ function WinnersPodiumOverlay({
   onWatchReplay,
   onRematch,
   onReturnToTitle,
+  onReturnToHome,
 }: {
   winner: HudSnapshot['players'][number];
   runnerUp: HudSnapshot['players'][number];
@@ -4873,6 +4846,7 @@ function WinnersPodiumOverlay({
   onWatchReplay: () => void;
   onRematch: () => void;
   onReturnToTitle: () => void;
+  onReturnToHome: () => void;
 }) {
   const podiumCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const spec = FIGHTER_SPECS[winner.id];
@@ -4947,7 +4921,7 @@ function WinnersPodiumOverlay({
           <canvas
             ref={podiumCanvasRef}
             aria-label={`${winner.name} performing victory animation atop the Winner's Podium`}
-            className="block w-full aspect-[460/216]"
+            className="block w-full aspect-[460/216] pixelated"
           />
         </div>
 
@@ -5008,7 +4982,14 @@ function WinnersPodiumOverlay({
             onClick={onReturnToTitle}
             className="py-2.5 px-4 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-sm border border-white/10 transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400"
           >
-            Title Screen
+            Arena Setup
+          </button>
+          <button
+            type="button"
+            onClick={onReturnToHome}
+            className="py-2.5 px-4 rounded-lg bg-slate-950 hover:bg-slate-800 text-slate-300 font-semibold text-sm border border-white/10 transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400"
+          >
+            Home
           </button>
         </div>
       </div>
