@@ -16,6 +16,7 @@ import {
   WORLD_WIDTH,
 } from './game/constants';
 import { soundSynth } from './game/audio';
+import { analyzeMatchFeats, formatMatchDuration } from './game/matchAnalysis';
 import { renderGameFrame, renderWinnersPodiumStage } from './game/renderer';
 import { AccountBar } from './components/AccountBar';
 import { AuthModal } from './components/AuthModal';
@@ -129,6 +130,12 @@ function createFighter(
     ultCharge: 0,
     damageDealt: 0,
     koCount: 0,
+    hitsLanded: 0,
+    longestCombo: 0,
+    currentComboCount: 0,
+    comboWindowTimer: 0,
+    peakSingleHit: 0,
+    heavyHitsLanded: 0,
     animState: 'idle',
     animTimer: 0,
     animDuration: 0,
@@ -216,6 +223,10 @@ function buildHudSnapshot(state: GameEngineState): HudSnapshot {
         y: Math.round(state.players[0].y),
         damageDealt: Math.round(state.players[0].damageDealt),
         koCount: state.players[0].koCount,
+        hitsLanded: state.players[0].hitsLanded,
+        longestCombo: state.players[0].longestCombo,
+        peakSingleHit: Math.round(state.players[0].peakSingleHit),
+        heavyHitsLanded: state.players[0].heavyHitsLanded,
       },
       {
         slot: 1,
@@ -235,6 +246,10 @@ function buildHudSnapshot(state: GameEngineState): HudSnapshot {
         y: Math.round(state.players[1].y),
         damageDealt: Math.round(state.players[1].damageDealt),
         koCount: state.players[1].koCount,
+        hitsLanded: state.players[1].hitsLanded,
+        longestCombo: state.players[1].longestCombo,
+        peakSingleHit: Math.round(state.players[1].peakSingleHit),
+        heavyHitsLanded: state.players[1].heavyHitsLanded,
       },
     ],
   };
@@ -1721,10 +1736,26 @@ export default function App() {
       const effectiveRaw = hasShield ? damageRaw * 0.25 : damageRaw;
       const finalDamage = Math.max(hasShield ? 2 : 4, Math.round(effectiveRaw * atkMultiplier - defReduction));
 
+      const heavy = finalDamage >= 24 || (options?.appliesStun ?? 0) > 0.6;
+
       defender.hp = Math.max(0, defender.hp - finalDamage);
-      if (attacker) {
+      if (attacker && attacker.slot !== defender.slot) {
         attacker.damageDealt += finalDamage;
         attacker.ultCharge = Math.min(100, attacker.ultCharge + ultGain);
+        if (!options?.isHazard) {
+          attacker.hitsLanded += 1;
+          attacker.peakSingleHit = Math.max(attacker.peakSingleHit, finalDamage);
+          if (heavy) attacker.heavyHitsLanded += 1;
+          if (!hasShield) {
+            const continuesCombo =
+              attacker.comboWindowTimer > 0 ||
+              defender.hitstunTimer > 0 ||
+              defender.stunTimer > 0;
+            attacker.currentComboCount = continuesCombo ? attacker.currentComboCount + 1 : 1;
+            attacker.comboWindowTimer = 1.45;
+            attacker.longestCombo = Math.max(attacker.longestCombo, attacker.currentComboCount);
+          }
+        }
       }
       defender.ultCharge = Math.min(100, defender.ultCharge + ultGain * 0.45);
 
@@ -1743,6 +1774,10 @@ export default function App() {
         defender.animDuration = defender.hitstunTimer;
         defender.squashX = 0.78;
         defender.squashY = 1.24;
+        if (!options?.isHazard) {
+          defender.currentComboCount = 0;
+          defender.comboWindowTimer = 0;
+        }
       } else {
         defender.hitFlashTimer = 0.07;
         soundSynth.playCrackHit();
@@ -1765,7 +1800,6 @@ export default function App() {
         defender.confuseTimer = Math.max(defender.confuseTimer, options.appliesConfuse);
       }
 
-      const heavy = finalDamage >= 24 || (options?.appliesStun ?? 0) > 0.6;
       engineRef.current.hitstopTimer = Math.max(engineRef.current.hitstopTimer, hitstop);
       engineRef.current.shakeIntensity = Math.max(
         engineRef.current.shakeIntensity,
@@ -2670,6 +2704,10 @@ export default function App() {
       if (f.comboResetTimer > 0) {
         f.comboResetTimer = Math.max(0, f.comboResetTimer - dt);
         if (f.comboResetTimer === 0) f.comboStep = 0;
+      }
+      if (f.comboWindowTimer > 0) {
+        f.comboWindowTimer = Math.max(0, f.comboWindowTimer - dt);
+        if (f.comboWindowTimer === 0) f.currentComboCount = 0;
       }
 
       // Honey Poison DoT
@@ -4623,6 +4661,7 @@ export default function App() {
           winner={winner}
           runnerUp={winner.slot === 0 ? p2 : p1}
           mapName={MAP_SPECS[hud.mapId].name}
+          matchTime={hud.matchTime}
           replayAvailable={replayAvailable}
           replayDurationSec={replayDurationSec}
           onWatchReplay={startReplay}
@@ -4831,6 +4870,7 @@ function WinnersPodiumOverlay({
   winner,
   runnerUp,
   mapName,
+  matchTime,
   replayAvailable,
   replayDurationSec,
   onWatchReplay,
@@ -4841,6 +4881,7 @@ function WinnersPodiumOverlay({
   winner: HudSnapshot['players'][number];
   runnerUp: HudSnapshot['players'][number];
   mapName: string;
+  matchTime: number;
   replayAvailable: boolean;
   replayDurationSec: number;
   onWatchReplay: () => void;
@@ -4851,7 +4892,16 @@ function WinnersPodiumOverlay({
   const podiumCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const spec = FIGHTER_SPECS[winner.id];
   const winnerTag = winner.slot === 0 ? 'Player 1' : winner.isAi ? 'CPU' : 'Player 2';
-  const runnerTag = runnerUp.slot === 0 ? 'Player 1' : runnerUp.isAi ? 'CPU' : 'Player 2';
+  const p1 = winner.slot === 0 ? winner : runnerUp;
+  const p2 = winner.slot === 1 ? winner : runnerUp;
+  const p1Tag = 'Player 1';
+  const p2Tag = p2.isAi ? 'CPU' : 'Player 2';
+
+  const analysis = analyzeMatchFeats(p1, p2, winner.slot, matchTime);
+  const mvpPlayer = analysis.mvpSlot === 0 ? p1 : p2;
+  const mvpSpec = FIGHTER_SPECS[mvpPlayer.id];
+  const mvpTag = mvpPlayer.slot === 0 ? p1Tag : p2Tag;
+  const mvpStanding = analysis.players[analysis.mvpSlot];
 
   useEffect(() => {
     const canvas = podiumCanvasRef.current;
@@ -4894,7 +4944,7 @@ function WinnersPodiumOverlay({
       aria-labelledby="winners-podium-title"
       className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/65 p-4"
     >
-      <div className="w-full max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto bg-slate-900/95 border border-white/15 rounded-xl p-5 sm:p-6 shadow-2xl text-center">
+      <div className="w-full max-w-xl max-h-[calc(100dvh-2rem)] overflow-y-auto bg-slate-900/95 border border-white/15 rounded-xl p-5 sm:p-6 shadow-2xl text-center">
         <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-amber-400">
           <Trophy className="w-3.5 h-3.5" aria-hidden="true" />
           <span>Winner&apos;s Podium</span>
@@ -4914,6 +4964,12 @@ function WinnersPodiumOverlay({
             ·
           </span>
           <span>{mapName}</span>
+          <span className="mx-1.5 text-slate-500" aria-hidden="true">
+            ·
+          </span>
+          <span className="font-mono-num text-slate-400">
+            {formatMatchDuration(analysis.matchDurationSec)}
+          </span>
         </p>
 
         {/* Animated Winner's Podium Canvas */}
@@ -4925,37 +4981,126 @@ function WinnersPodiumOverlay({
           />
         </div>
 
-        {/* Winner Metrics Row */}
-        <div className="mt-4 grid grid-cols-3 divide-x divide-white/10 py-2">
-          <div>
-            <div className="text-[11px] font-medium text-slate-400">Total KOs</div>
-            <div className="font-mono-num text-2xl font-extrabold text-amber-400 mt-0.5">
-              {winner.koCount}
+        {/* Highlighted Player With Most Significant Feats */}
+        <section
+          aria-label="Match feat analysis highlight"
+          className="mt-4 pt-4 border-t border-white/10 text-left flex items-center gap-3.5"
+        >
+          <div className="shrink-0">
+            <PixelFighterPortrait id={mvpPlayer.id} size={56} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-medium text-amber-400 flex flex-wrap items-center gap-x-1.5">
+              <span>Most Significant Feats</span>
+              <span className="text-slate-500" aria-hidden="true">
+                ·
+              </span>
+              <span className="text-white font-semibold">{mvpTag}</span>
+              <span className="text-slate-500" aria-hidden="true">
+                ·
+              </span>
+              <span style={{ color: mvpSpec.accentColor }}>{mvpPlayer.name}</span>
+              {!analysis.winnerIsMvp && (
+                <>
+                  <span className="text-slate-500" aria-hidden="true">
+                    ·
+                  </span>
+                  <span className="text-sky-300">Runner-up Standout</span>
+                </>
+              )}
+            </div>
+            <p className="text-sm font-bold text-white mt-0.5 leading-snug">
+              {analysis.headline}
+            </p>
+            <p className="text-xs text-slate-300 font-mono-num mt-0.5">
+              {analysis.detailLine}
+            </p>
+          </div>
+          <div className="shrink-0 text-right pl-2 border-l border-white/10">
+            <div className="text-[11px] font-medium text-slate-400">Feats Led</div>
+            <div className="font-mono-num text-xl font-extrabold text-amber-300">
+              {mvpStanding.featsLed}/{analysis.totalFeatCategories}
             </div>
           </div>
-          <div>
-            <div className="text-[11px] font-medium text-slate-400">Hearts Left</div>
-            <div className="font-mono-num text-2xl font-bold text-white mt-0.5">
-              {winner.stocks}
-            </div>
-          </div>
-          <div>
-            <div className="text-[11px] font-medium text-slate-400">Damage Dealt</div>
-            <div className="font-mono-num text-2xl font-bold text-white mt-0.5">
-              {winner.damageDealt}
-            </div>
-          </div>
-        </div>
+        </section>
 
-        {/* Runner-up line */}
-        <div className="mt-1 pt-2.5 border-t border-white/10 flex items-center justify-between text-xs text-slate-400 font-mono-num">
-          <span>
-            2nd: {runnerTag} ({runnerUp.name})
-          </span>
-          <span>
-            {runnerUp.koCount} KOs · {runnerUp.damageDealt} DMG
-          </span>
-        </div>
+        {/* Head-to-Head Match Feat Breakdown */}
+        <section
+          aria-label="Head-to-head match feat comparison"
+          className="mt-4 pt-3.5 border-t border-white/10"
+        >
+          <div className="grid grid-cols-[1fr_auto_1fr] items-end pb-2 border-b border-white/10 text-xs">
+            <div className="text-left">
+              <span
+                className={
+                  analysis.mvpSlot === 0
+                    ? 'font-bold text-amber-300'
+                    : 'font-semibold text-slate-300'
+                }
+              >
+                {p1Tag}
+              </span>
+              <span className="text-slate-500 mx-1" aria-hidden="true">
+                ·
+              </span>
+              <span style={{ color: FIGHTER_SPECS[p1.id].accentColor }}>{p1.name}</span>
+            </div>
+            <div className="text-[11px] font-medium text-slate-400 px-3">Feat</div>
+            <div className="text-right">
+              <span style={{ color: FIGHTER_SPECS[p2.id].accentColor }}>{p2.name}</span>
+              <span className="text-slate-500 mx-1" aria-hidden="true">
+                ·
+              </span>
+              <span
+                className={
+                  analysis.mvpSlot === 1
+                    ? 'font-bold text-amber-300'
+                    : 'font-semibold text-slate-300'
+                }
+              >
+                {p2Tag}
+              </span>
+            </div>
+          </div>
+
+          <div className="divide-y divide-white/[0.06]">
+            {analysis.feats.map((feat) => {
+              const p1Leads = feat.leaderSlot === 0;
+              const p2Leads = feat.leaderSlot === 1;
+              return (
+                <div
+                  key={feat.id}
+                  className="grid grid-cols-[1fr_auto_1fr] items-center py-2 text-sm"
+                >
+                  <div
+                    className={`text-left font-mono-num ${
+                      p1Leads ? 'font-bold text-amber-300' : 'font-medium text-slate-400'
+                    }`}
+                  >
+                    {feat.p1Display}
+                  </div>
+                  <div className="text-xs font-medium text-slate-300 px-3">{feat.label}</div>
+                  <div
+                    className={`text-right font-mono-num ${
+                      p2Leads ? 'font-bold text-amber-300' : 'font-medium text-slate-400'
+                    }`}
+                  >
+                    {feat.p2Display}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-1 pt-2.5 border-t border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400 font-mono-num">
+            <span>
+              Winner Hearts Left: <strong className="text-white">{winner.stocks}</strong>
+            </span>
+            <span>
+              Feat Score: {analysis.players[0].featsLed} – {analysis.players[1].featsLed}
+            </span>
+          </div>
+        </section>
 
         {/* Actions */}
         <div className="mt-5 flex flex-wrap items-center gap-2.5">

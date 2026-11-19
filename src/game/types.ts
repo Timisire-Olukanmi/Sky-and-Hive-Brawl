@@ -298,6 +298,12 @@ export interface FighterEntity {
   ultCharge: number;
   damageDealt: number;
   koCount: number;
+  hitsLanded: number;
+  longestCombo: number;
+  currentComboCount: number;
+  comboWindowTimer: number;
+  peakSingleHit: number;
+  heavyHitsLanded: number;
 
   animState: AnimState;
   animTimer: number;
@@ -485,6 +491,10 @@ export interface HudFighterSnapshot {
   y: number;
   damageDealt: number;
   koCount: number;
+  hitsLanded: number;
+  longestCombo: number;
+  peakSingleHit: number;
+  heavyHitsLanded: number;
 }
 
 export interface HudSnapshot {
