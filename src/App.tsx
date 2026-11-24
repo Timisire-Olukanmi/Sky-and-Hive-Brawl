@@ -103,20 +103,24 @@ function createFighter(
   slot: 0 | 1,
   id: FighterId,
   isAi: boolean,
-  mapId: MapId
+  mapId: MapId,
+  isDummy = false
 ): FighterEntity {
   const spec = FIGHTER_SPECS[id];
   const spawn = MAP_SPECS[mapId].spawnPoints[slot];
   return {
     slot,
     id,
-    isAi,
+    isAi: isDummy ? false : isAi,
+    isDummy,
+    dummyAnchorX: spawn.x,
+    dummyAnchorY: spawn.y,
     x: spawn.x,
     y: spawn.y,
     vx: 0,
     vy: 0,
-    width: spec.width,
-    height: spec.height,
+    width: isDummy ? 68 : spec.width,
+    height: isDummy ? 98 : spec.height,
     facing: slot === 0 ? 1 : -1,
     grounded: true,
     jumpsRemaining: 2,
@@ -124,15 +128,19 @@ function createFighter(
     coyoteTimer: 0,
     jumpBufferTimer: 0,
     dropThroughTimer: 0,
-    hp: spec.maxHp,
-    maxHp: spec.maxHp,
-    stocks: STARTING_STOCKS,
+    hp: isDummy ? 999 : spec.maxHp,
+    maxHp: isDummy ? 999 : spec.maxHp,
+    stocks: isDummy ? 99 : STARTING_STOCKS,
     ultCharge: 0,
     damageDealt: 0,
     koCount: 0,
     hitsLanded: 0,
     longestCombo: 0,
     currentComboCount: 0,
+    currentComboDamage: 0,
+    lastComboCount: 0,
+    lastComboDamage: 0,
+    comboDisplayTimer: 0,
     comboWindowTimer: 0,
     peakSingleHit: 0,
     heavyHitsLanded: 0,
@@ -184,7 +192,7 @@ function createInitialEngineState(
     nextEntityId: 1,
     players: [
       createFighter(0, p1Id, false, mapId),
-      createFighter(1, p2Id, mode === '1P_AI', mapId),
+      createFighter(1, p2Id, mode === '1P_AI', mapId, mode === 'TRAINING'),
     ],
     platforms: createMapPlatforms(mapId),
     obstacles: createMapObstacles(mapId),
@@ -194,6 +202,7 @@ function createInitialEngineState(
     timedActions: [],
     particles: createParticlePool(200),
     slashes: [],
+    floatingNumbers: [],
   };
 }
 
@@ -210,6 +219,7 @@ function buildHudSnapshot(state: GameEngineState): HudSnapshot {
         id: state.players[0].id,
         name: FIGHTER_SPECS[state.players[0].id].name,
         isAi: state.players[0].isAi,
+        isDummy: state.players[0].isDummy,
         hp: Math.max(0, Math.ceil(state.players[0].hp)),
         maxHp: state.players[0].maxHp,
         stocks: state.players[0].stocks,
@@ -225,14 +235,19 @@ function buildHudSnapshot(state: GameEngineState): HudSnapshot {
         koCount: state.players[0].koCount,
         hitsLanded: state.players[0].hitsLanded,
         longestCombo: state.players[0].longestCombo,
+        currentComboCount: state.players[0].currentComboCount,
+        currentComboDamage: Math.round(state.players[0].currentComboDamage),
+        lastComboCount: state.players[0].lastComboCount,
+        lastComboDamage: Math.round(state.players[0].lastComboDamage),
         peakSingleHit: Math.round(state.players[0].peakSingleHit),
         heavyHitsLanded: state.players[0].heavyHitsLanded,
       },
       {
         slot: 1,
         id: state.players[1].id,
-        name: FIGHTER_SPECS[state.players[1].id].name,
+        name: state.players[1].isDummy ? 'Training Dummy' : FIGHTER_SPECS[state.players[1].id].name,
         isAi: state.players[1].isAi,
+        isDummy: state.players[1].isDummy,
         hp: Math.max(0, Math.ceil(state.players[1].hp)),
         maxHp: state.players[1].maxHp,
         stocks: state.players[1].stocks,
@@ -248,6 +263,10 @@ function buildHudSnapshot(state: GameEngineState): HudSnapshot {
         koCount: state.players[1].koCount,
         hitsLanded: state.players[1].hitsLanded,
         longestCombo: state.players[1].longestCombo,
+        currentComboCount: state.players[1].currentComboCount,
+        currentComboDamage: Math.round(state.players[1].currentComboDamage),
+        lastComboCount: state.players[1].lastComboCount,
+        lastComboDamage: Math.round(state.players[1].lastComboDamage),
         peakSingleHit: Math.round(state.players[1].peakSingleHit),
         heavyHitsLanded: state.players[1].heavyHitsLanded,
       },
@@ -334,6 +353,7 @@ function captureReplayFrame(
     })),
     slashes: state.slashes.map((s) => ({ ...s })),
     activeParticles,
+    floatingNumbers: state.floatingNumbers.map((fn) => ({ ...fn })),
   };
 }
 
@@ -360,6 +380,9 @@ function applyReplayFrame(state: GameEngineState, frame: ReplayFrame): void {
     hitTimers: [z.hitTimers[0], z.hitTimers[1]],
   }));
   state.slashes = frame.slashes.map((s) => ({ ...s }));
+  state.floatingNumbers = frame.floatingNumbers
+    ? frame.floatingNumbers.map((fn) => ({ ...fn }))
+    : [];
 
   for (let i = 0; i < state.particles.length; i++) {
     if (i < frame.activeParticles.length) {
@@ -526,6 +549,104 @@ export default function App() {
     }
     return selection;
   }, []);
+
+  const startTraining = useCallback(() => {
+    soundSynth.playUiClick();
+    matchRecordedRef.current = false;
+    setSelectedMode('TRAINING');
+    const matchMapId = resolveMapId(selectedMap);
+    const next = createInitialEngineState(
+      'PLAYING',
+      'TRAINING',
+      matchMapId,
+      p1Fighter,
+      p2Fighter
+    );
+    engineRef.current = next;
+    replayFramesRef.current = [];
+    victoryRecordTailRef.current = 0;
+    preReplayFrameRef.current = null;
+    replayKoOffsetsRef.current = [];
+    replayPlayingRef.current = false;
+    replayElapsedRef.current = 0;
+    setReplayAvailable(false);
+    setReplayDurationSec(0);
+    justPressedRef.current.clear();
+    syncHudImmediate();
+  }, [p1Fighter, p2Fighter, resolveMapId, selectedMap, syncHudImmediate]);
+
+  const refillTrainingUlt = useCallback(() => {
+    const state = engineRef.current;
+    if (state.phase !== 'PLAYING' || state.mode !== 'TRAINING') return;
+    state.players[0].ultCharge = 100;
+    soundSynth.playTauntBoost();
+    spawnParticle(
+      state.players[0].x,
+      state.players[0].y - state.players[0].height * 0.5,
+      0,
+      0,
+      36,
+      '#FBBF24',
+      0.28,
+      0,
+      'ring'
+    );
+    syncHudImmediate();
+  }, [spawnParticle, syncHudImmediate]);
+
+  const resetTrainingSession = useCallback(() => {
+    const state = engineRef.current;
+    if (state.phase !== 'PLAYING' || state.mode !== 'TRAINING') return;
+    soundSynth.playUiClick();
+    const p1 = state.players[0];
+    const dummy = state.players[1];
+    p1.hp = p1.maxHp;
+    p1.ultCharge = 100;
+    p1.damageDealt = 0;
+    p1.hitsLanded = 0;
+    p1.longestCombo = 0;
+    p1.currentComboCount = 0;
+    p1.currentComboDamage = 0;
+    p1.lastComboCount = 0;
+    p1.lastComboDamage = 0;
+    p1.comboDisplayTimer = 0;
+    p1.comboWindowTimer = 0;
+    p1.peakSingleHit = 0;
+    p1.heavyHitsLanded = 0;
+    p1.poisonTimer = 0;
+    p1.slowTimer = 0;
+    p1.stunTimer = 0;
+    p1.confuseTimer = 0;
+
+    dummy.hp = dummy.maxHp;
+    dummy.x = dummy.dummyAnchorX;
+    dummy.y = dummy.dummyAnchorY;
+    dummy.vx = 0;
+    dummy.vy = 0;
+    dummy.poisonTimer = 0;
+    dummy.slowTimer = 0;
+    dummy.stunTimer = 0;
+    dummy.confuseTimer = 0;
+    dummy.hitstunTimer = 0;
+    dummy.hitFlashTimer = 0;
+    dummy.animState = 'idle';
+
+    state.floatingNumbers = [
+      {
+        id: state.nextEntityId++,
+        x: dummy.x,
+        y: dummy.y - dummy.height - 16,
+        vx: 0,
+        vy: -55,
+        text: 'RESET',
+        color: '#34D399',
+        scale: 1.05,
+        life: 0.9,
+        maxLife: 0.9,
+      },
+    ];
+    syncHudImmediate();
+  }, [syncHudImmediate]);
 
   const startMatch = useCallback(() => {
     soundSynth.playUiClick();
@@ -778,11 +899,18 @@ export default function App() {
       engine.obstacles = createMapObstacles(previewMap);
       engine.destructibles = createMapDestructibles(previewMap);
       engine.players[0] = createFighter(0, p1Fighter, false, previewMap);
-      engine.players[1] = createFighter(1, p2Fighter, true, previewMap);
+      engine.players[1] = createFighter(
+        1,
+        p2Fighter,
+        selectedMode === '1P_AI',
+        previewMap,
+        selectedMode === 'TRAINING'
+      );
       engine.projectiles = [];
       engine.zones = [];
       engine.timedActions = [];
       engine.slashes = [];
+      engine.floatingNumbers = [];
       syncHudImmediate();
     }
   }, [p1Fighter, p2Fighter, selectedMap, selectedMode, syncHudImmediate]);
@@ -825,6 +953,18 @@ export default function App() {
       if (code === 'KeyM') {
         toggleMute();
         return;
+      }
+
+      if (engineRef.current.phase === 'PLAYING' && engineRef.current.mode === 'TRAINING') {
+        if (code === 'KeyF') {
+          refillTrainingUlt();
+          return;
+        }
+        if (code === 'Backspace') {
+          e.preventDefault();
+          resetTrainingSession();
+          return;
+        }
       }
 
       if (engineRef.current.phase === 'REPLAY' && code === 'Space') {
@@ -1736,6 +1876,32 @@ export default function App() {
       const effectiveRaw = hasShield ? damageRaw * 0.25 : damageRaw;
       const finalDamage = Math.max(hasShield ? 2 : 4, Math.round(effectiveRaw * atkMultiplier - defReduction));
 
+      const spawnFloatingNumber = (
+        x: number,
+        y: number,
+        text: string,
+        color: string,
+        scale = 1,
+        maxLife = 0.85
+      ) => {
+        const list = engineRef.current.floatingNumbers;
+        list.push({
+          id: engineRef.current.nextEntityId++,
+          x,
+          y,
+          vx: (Math.random() - 0.5) * 34,
+          vy: -92,
+          text,
+          color,
+          scale,
+          life: maxLife,
+          maxLife,
+        });
+        if (list.length > 40) {
+          list.shift();
+        }
+      };
+
       const heavy = finalDamage >= 24 || (options?.appliesStun ?? 0) > 0.6;
 
       defender.hp = Math.max(0, defender.hp - finalDamage);
@@ -1752,6 +1918,12 @@ export default function App() {
               defender.hitstunTimer > 0 ||
               defender.stunTimer > 0;
             attacker.currentComboCount = continuesCombo ? attacker.currentComboCount + 1 : 1;
+            attacker.currentComboDamage = continuesCombo
+              ? attacker.currentComboDamage + finalDamage
+              : finalDamage;
+            attacker.lastComboCount = attacker.currentComboCount;
+            attacker.lastComboDamage = attacker.currentComboDamage;
+            attacker.comboDisplayTimer = 2.4;
             attacker.comboWindowTimer = 1.45;
             attacker.longestCombo = Math.max(attacker.longestCombo, attacker.currentComboCount);
           }
@@ -1759,29 +1931,66 @@ export default function App() {
       }
       defender.ultCharge = Math.min(100, defender.ultCharge + ultGain * 0.45);
 
+      if (engineRef.current.mode === 'TRAINING' && defender.isDummy) {
+        spawnFloatingNumber(
+          defender.x + (Math.random() - 0.5) * 28,
+          defender.y - defender.height * 0.78,
+          `${finalDamage}${heavy ? '!' : ''}`,
+          heavy ? '#FB923C' : '#FEF08A',
+          heavy ? 1.25 : 1.0,
+          0.85
+        );
+      }
+
       const missingRatio = 1 - defender.hp / defender.maxHp;
       const knockbackScale = ((0.85 + missingRatio * 0.95) / defSpec.weight) * (hasShield ? 0.15 : 1);
 
-      defender.vx = dir * kbX * knockbackScale;
-      defender.vy = kbY * knockbackScale;
+      if (!defender.isDummy) {
+        defender.vx = dir * kbX * knockbackScale;
+        defender.vy = kbY * knockbackScale;
+      } else {
+        defender.vx = 0;
+        defender.vy = 0;
+      }
       if (!hasShield) {
-        defender.grounded = false;
+        if (!defender.isDummy) {
+          defender.grounded = false;
+        }
         defender.recoveryUsed = false; // Taking a hit refreshes recovery like Smash!
         defender.hitFlashTimer = 0.12;
-        defender.hitstunTimer = Math.min(0.45, 0.18 + missingRatio * 0.22);
+        defender.hitstunTimer = defender.isDummy
+          ? Math.min(0.45, 0.24 + (heavy ? 0.14 : 0))
+          : Math.min(0.45, 0.18 + missingRatio * 0.22);
         defender.animState = 'hitstun';
         defender.animTimer = 0;
         defender.animDuration = defender.hitstunTimer;
-        defender.squashX = 0.78;
-        defender.squashY = 1.24;
+        defender.squashX = 0.76;
+        defender.squashY = 1.25;
         if (!options?.isHazard) {
           defender.currentComboCount = 0;
+          defender.currentComboDamage = 0;
           defender.comboWindowTimer = 0;
         }
       } else {
         defender.hitFlashTimer = 0.07;
         soundSynth.playCrackHit();
         spawnParticle(defender.x, defender.y - defender.height * 0.5, 0, 0, 42, '#A3E635', 0.22, 0, 'ring');
+      }
+
+      if (defender.isDummy && defender.hp <= 0) {
+        defender.hp = defender.maxHp;
+        defender.poisonTimer = 0;
+        defender.slowTimer = 0;
+        defender.stunTimer = 0;
+        defender.confuseTimer = 0;
+        spawnFloatingNumber(
+          defender.x,
+          defender.y - defender.height - 20,
+          'HP FULL',
+          '#34D399',
+          1.0,
+          0.9
+        );
       }
 
       if (options?.appliesSlow && options.appliesSlow > 0) {
@@ -2026,6 +2235,34 @@ export default function App() {
     const handleStockLoss = (loser: FighterEntity, winner: FighterEntity) => {
       const state = engineRef.current;
       if (state.phase !== 'PLAYING') return;
+      if (state.mode === 'TRAINING') {
+        if (loser.isDummy) {
+          loser.hp = loser.maxHp;
+          loser.x = loser.dummyAnchorX;
+          loser.y = loser.dummyAnchorY;
+          loser.vx = 0;
+          loser.vy = 0;
+          loser.poisonTimer = 0;
+          loser.slowTimer = 0;
+          loser.stunTimer = 0;
+          loser.confuseTimer = 0;
+          loser.animState = 'idle';
+          return;
+        }
+        const spawn = MAP_SPECS[state.mapId].spawnPoints[loser.slot];
+        loser.x = spawn.x;
+        loser.y = 140;
+        loser.vx = 0;
+        loser.vy = 0;
+        loser.hp = loser.maxHp;
+        loser.stocks = STARTING_STOCKS;
+        loser.jumpsRemaining = 2;
+        loser.recoveryUsed = false;
+        loser.invulnTimer = 1.0;
+        loser.animState = 'fall';
+        syncHudImmediate();
+        return;
+      }
       loser.stocks = Math.max(0, loser.stocks - 1);
       winner.koCount += 1;
       state.shakeIntensity = 16;
@@ -2705,9 +2942,54 @@ export default function App() {
         f.comboResetTimer = Math.max(0, f.comboResetTimer - dt);
         if (f.comboResetTimer === 0) f.comboStep = 0;
       }
+      if (f.comboDisplayTimer > 0) {
+        f.comboDisplayTimer = Math.max(0, f.comboDisplayTimer - dt);
+      }
       if (f.comboWindowTimer > 0) {
         f.comboWindowTimer = Math.max(0, f.comboWindowTimer - dt);
-        if (f.comboWindowTimer === 0) f.currentComboCount = 0;
+        if (f.comboWindowTimer === 0) {
+          f.currentComboCount = 0;
+          f.currentComboDamage = 0;
+          if (
+            engineRef.current.mode === 'TRAINING' &&
+            opponent.isDummy &&
+            (opponent.hp < opponent.maxHp ||
+              opponent.poisonTimer > 0 ||
+              opponent.stunTimer > 0 ||
+              opponent.slowTimer > 0 ||
+              opponent.confuseTimer > 0)
+          ) {
+            opponent.hp = opponent.maxHp;
+            opponent.poisonTimer = 0;
+            opponent.poisonSourceSlot = null;
+            opponent.slowTimer = 0;
+            opponent.stunTimer = 0;
+            opponent.confuseTimer = 0;
+            spawnParticle(
+              opponent.x,
+              opponent.y - opponent.height * 0.5,
+              0,
+              0,
+              38,
+              '#34D399',
+              0.28,
+              0,
+              'ring'
+            );
+            engineRef.current.floatingNumbers.push({
+              id: engineRef.current.nextEntityId++,
+              x: opponent.x,
+              y: opponent.y - opponent.height - 18,
+              vx: 0,
+              vy: -60,
+              text: 'HP RESET',
+              color: '#34D399',
+              scale: 0.95,
+              life: 0.75,
+              maxLife: 0.75,
+            });
+          }
+        }
       }
 
       // Honey Poison DoT
@@ -2720,6 +3002,20 @@ export default function App() {
           f.hp = Math.max(0, f.hp - poisonDmg);
           if (f.poisonSourceSlot !== null) {
             engineRef.current.players[f.poisonSourceSlot].damageDealt += poisonDmg;
+          }
+          if (engineRef.current.mode === 'TRAINING' && f.isDummy) {
+            engineRef.current.floatingNumbers.push({
+              id: engineRef.current.nextEntityId++,
+              x: f.x + (Math.random() - 0.5) * 20,
+              y: f.y - f.height * 0.72,
+              vx: (Math.random() - 0.5) * 20,
+              vy: -70,
+              text: `${poisonDmg}`,
+              color: '#C084FC',
+              scale: 0.85,
+              life: 0.65,
+              maxLife: 0.65,
+            });
           }
           soundSynth.playPoisonTick();
           for (let i = 0; i < 4; i++) {
@@ -2739,6 +3035,59 @@ export default function App() {
         if (f.poisonTimer === 0) {
           f.poisonSourceSlot = null;
         }
+      }
+
+      if (f.isDummy) {
+        if (f.hitstunTimer > 0) {
+          f.hitstunTimer = Math.max(0, f.hitstunTimer - dt);
+          if (f.stunTimer > 0) f.stunTimer = Math.max(0, f.stunTimer - dt);
+          f.animTimer += dt;
+          if (f.hitstunTimer === 0) {
+            f.animState = f.stunTimer > 0 ? 'stunned' : 'idle';
+          }
+        } else if (f.stunTimer > 0) {
+          f.stunTimer = Math.max(0, f.stunTimer - dt);
+          f.animState = 'stunned';
+          f.animTimer += dt;
+          if (f.stunTimer === 0) {
+            f.animState = 'idle';
+          }
+        } else {
+          f.animState = 'idle';
+          f.animTimer += dt;
+        }
+
+        f.vx = 0;
+        f.x = f.dummyAnchorX;
+        const gravScale = MAP_SPECS[engineRef.current.mapId].gravityScale ?? 1;
+        f.vy = Math.min(MAX_FALL_SPEED * gravScale, f.vy + GRAVITY * gravScale * dt);
+        const prevDummyY = f.y;
+        f.y += f.vy * dt;
+        let dummyLanded = false;
+        if (f.vy >= 0) {
+          for (const plat of plats) {
+            if (plat.broken) continue;
+            const withinX =
+              f.x + f.width * 0.28 >= plat.x && f.x - f.width * 0.28 <= plat.x + plat.width;
+            const crossedTop = prevDummyY <= plat.y + 10 && f.y >= plat.y;
+            if (withinX && crossedTop) {
+              f.y = plat.y;
+              f.vy = 0;
+              f.grounded = true;
+              dummyLanded = true;
+              break;
+            }
+          }
+        }
+        if (!dummyLanded) f.grounded = false;
+        if (f.y > BLAST_ZONE.bottom || f.hp <= 0) {
+          f.hp = f.maxHp;
+          f.x = f.dummyAnchorX;
+          f.y = f.dummyAnchorY;
+          f.vx = 0;
+          f.vy = 0;
+        }
+        return;
       }
 
       f.ultCharge = Math.min(100, f.ultCharge + dt * 2.2);
@@ -2769,7 +3118,9 @@ export default function App() {
         if (f.slot === 0) {
           if (held.has('KeyA')) moveDir -= 1;
           if (held.has('KeyD')) moveDir += 1;
-          if (engineRef.current.mode === '1P_AI') {
+          const singleHumanMode =
+            engineRef.current.mode === '1P_AI' || engineRef.current.mode === 'TRAINING';
+          if (singleHumanMode) {
             if (held.has('ArrowLeft')) moveDir -= 1;
             if (held.has('ArrowRight')) moveDir += 1;
           }
@@ -2777,13 +3128,13 @@ export default function App() {
           if (isConfused) moveDir = -moveDir;
 
           const rawUpHeld =
-            held.has('KeyW') || (engineRef.current.mode === '1P_AI' && held.has('ArrowUp'));
+            held.has('KeyW') || (singleHumanMode && held.has('ArrowUp'));
           const rawUpJust =
-            just.has('KeyW') || (engineRef.current.mode === '1P_AI' && just.has('ArrowUp'));
+            just.has('KeyW') || (singleHumanMode && just.has('ArrowUp'));
           const rawDownHeld =
-            held.has('KeyS') || (engineRef.current.mode === '1P_AI' && held.has('ArrowDown'));
+            held.has('KeyS') || (singleHumanMode && held.has('ArrowDown'));
           const rawDownJust =
-            just.has('KeyS') || (engineRef.current.mode === '1P_AI' && just.has('ArrowDown'));
+            just.has('KeyS') || (singleHumanMode && just.has('ArrowDown'));
 
           const upHeld = isConfused ? rawDownHeld : rawUpHeld;
           jumpPressed = isConfused ? rawDownJust : rawUpJust;
@@ -3549,13 +3900,13 @@ export default function App() {
             }
           );
           if (hit) {
-            if (p.pullOnHit) {
+            if (p.pullOnHit && !target.isDummy) {
               const pullDir: 1 | -1 = attacker.x >= target.x ? 1 : -1;
               target.vx = pullDir * 520;
               target.vy = -210;
               spawnParticle(target.x, targetCy, 0, 0, 30, '#38BDF8', 0.22, 0, 'ring');
             }
-            if (p.floatTrap) {
+            if (p.floatTrap && !target.isDummy) {
               target.vx *= 0.25;
               target.vy = -490;
               spawnParticle(target.x, targetCy, 0, 0, 38, '#06B6D4', 0.3, 0, 'ring');
@@ -3883,6 +4234,18 @@ export default function App() {
         p.vy += p.gravity * dt;
         p.x += p.vx * dt;
         p.y += p.vy * dt;
+      }
+
+      for (let i = state.floatingNumbers.length - 1; i >= 0; i--) {
+        const fn = state.floatingNumbers[i];
+        fn.life -= dt;
+        if (fn.life <= 0) {
+          state.floatingNumbers.splice(i, 1);
+          continue;
+        }
+        fn.x += fn.vx * dt;
+        fn.y += fn.vy * dt;
+        fn.vy += 120 * dt;
       }
     };
 
@@ -4231,6 +4594,38 @@ export default function App() {
                     {replayHud.elapsed.toFixed(1)}s / {replayHud.duration.toFixed(1)}s
                   </span>
                 </>
+              ) : hud.mode === 'TRAINING' ? (
+                <div className="bg-slate-950/85 border border-emerald-400/25 rounded-xl px-4 py-2 text-center shadow-lg">
+                  <div className="text-[10px] font-semibold tracking-wider text-emerald-400 uppercase">
+                    Training Combo Lab · {MAP_SPECS[hud.mapId].name}
+                  </div>
+                  <div className="mt-1 flex items-center gap-4 font-mono-num text-xs">
+                    <div>
+                      <div className="text-[10px] text-slate-400">Combo</div>
+                      <div className="text-base font-extrabold text-amber-300">
+                        {p1.currentComboCount > 0
+                          ? `${p1.currentComboCount}x`
+                          : p1.lastComboCount > 0
+                          ? `${p1.lastComboCount}x`
+                          : '0x'}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-400">Combo DMG</div>
+                      <div className="text-base font-bold text-white">
+                        {p1.currentComboCount > 0 ? p1.currentComboDamage : p1.lastComboDamage}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-400">Best</div>
+                      <div className="text-base font-bold text-sky-300">{p1.longestCombo}x</div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-slate-400">Peak Hit</div>
+                      <div className="text-base font-bold text-orange-300">{p1.peakSingleHit}</div>
+                    </div>
+                  </div>
+                </div>
               ) : (
                 <>
                   <span className="font-mono-num text-xl font-bold text-white tracking-tight drop-shadow">
@@ -4355,6 +4750,28 @@ export default function App() {
                 </span>
               </div>
             </div>
+          ) : hud.mode === 'TRAINING' ? (
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <div className="pointer-events-auto flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={refillTrainingUlt}
+                  className="px-3 py-1 rounded-md bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[11px] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  Fill Ult (F)
+                </button>
+                <button
+                  type="button"
+                  onClick={resetTrainingSession}
+                  className="px-3 py-1 rounded-md bg-slate-900 hover:bg-slate-800 text-emerald-300 border border-emerald-400/30 font-semibold text-[11px] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  Reset Stats (Backspace)
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-200/80 font-medium tracking-wide bg-slate-950/65 px-3 py-1 rounded-md border border-white/10 whitespace-nowrap">
+                WASD/Arrows Move · J Combo · K Special · R (W+K) Recovery · L Ultimate · Esc Pause
+              </p>
+            </div>
           ) : (
             <div className="flex justify-center">
               <p className="text-[11px] text-slate-200/75 font-medium tracking-wide bg-slate-950/55 px-3 py-1 rounded-md border border-white/10 whitespace-nowrap">
@@ -4377,6 +4794,7 @@ export default function App() {
           p2Fighter={p2Fighter}
           onEnterArenaSetup={enterArenaSetup}
           onQuickBattle={startMatch}
+          onStartTraining={startTraining}
           onOpenProfileModal={() => setProfileModalOpen(true)}
           onOpenUpgradeModal={() => {
             setAuthModalMode('upgrade');
@@ -4465,14 +4883,14 @@ export default function App() {
               <div className="flex flex-col gap-3">
                 <div>
                   <div className="text-xs font-semibold text-slate-400 mb-1.5">Battle Mode</div>
-                  <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-900 rounded-lg border border-white/10">
+                  <div className="grid grid-cols-3 gap-1 p-1 bg-slate-900 rounded-lg border border-white/10">
                     <button
                       type="button"
                       onClick={() => {
                         soundSynth.playUiClick();
                         setSelectedMode('1P_AI');
                       }}
-                      className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      className={`px-2 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                         selectedMode === '1P_AI'
                           ? 'bg-amber-500 text-slate-950'
                           : 'text-slate-300 hover:text-white'
@@ -4486,13 +4904,27 @@ export default function App() {
                         soundSynth.playUiClick();
                         setSelectedMode('2P_LOCAL');
                       }}
-                      className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      className={`px-2 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                         selectedMode === '2P_LOCAL'
                           ? 'bg-sky-400 text-slate-950'
                           : 'text-slate-300 hover:text-white'
                       }`}
                     >
                       2P Local
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        soundSynth.playUiClick();
+                        setSelectedMode('TRAINING');
+                      }}
+                      className={`px-2 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                        selectedMode === 'TRAINING'
+                          ? 'bg-emerald-400 text-slate-950'
+                          : 'text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      Training
                     </button>
                   </div>
                 </div>
@@ -4572,14 +5004,38 @@ export default function App() {
                 }}
               />
 
-              <FighterSelectorColumn
-                label={selectedMode === '1P_AI' ? 'CPU Opponent' : 'Player 2'}
-                selected={p2Fighter}
-                onSelect={(id) => {
-                  soundSynth.playUiClick();
-                  setP2Fighter(id);
-                }}
-              />
+              {selectedMode === 'TRAINING' ? (
+                <div className="flex flex-col">
+                  <div className="text-xs font-semibold text-slate-400 mb-1.5">Training Target</div>
+                  <div className="flex-1 bg-slate-900/90 border border-emerald-400/25 rounded-lg p-4 flex flex-col justify-between text-left">
+                    <div>
+                      <div className="text-sm font-bold text-emerald-300">
+                        Static Training Dummy
+                      </div>
+                      <p className="text-xs text-slate-300 mt-1.5 leading-relaxed">
+                        Anchored wooden target dummy for practicing ground, aerial, special, and ultimate combos without knockback chasing.
+                      </p>
+                      <ul className="mt-3 space-y-1.5 text-xs text-slate-300 border-t border-white/10 pt-3">
+                        <li>· Live hit-combo counter &amp; floating damage numbers</li>
+                        <li>· 999 HP with automatic reset between combos</li>
+                        <li>· Instant Ult refill (F) &amp; session reset (Backspace)</li>
+                      </ul>
+                    </div>
+                    <div className="mt-4 pt-3 border-t border-white/10 text-[11px] text-slate-400">
+                      Training sessions never affect win/loss records.
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <FighterSelectorColumn
+                  label={selectedMode === '1P_AI' ? 'CPU Opponent' : 'Player 2'}
+                  selected={p2Fighter}
+                  onSelect={(id) => {
+                    soundSynth.playUiClick();
+                    setP2Fighter(id);
+                  }}
+                />
+              )}
             </div>
 
             <div className="mt-4 pt-3.5 border-t border-white/10 flex flex-col sm:flex-row items-center justify-between gap-3">
@@ -4598,9 +5054,13 @@ export default function App() {
                 <button
                   type="button"
                   onClick={startMatch}
-                  className="flex-1 sm:flex-initial px-7 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className={`flex-1 sm:flex-initial px-7 py-2.5 rounded-lg font-bold text-sm transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    selectedMode === 'TRAINING'
+                      ? 'bg-emerald-400 hover:bg-emerald-300 text-slate-950'
+                      : 'bg-amber-500 hover:bg-amber-400 text-slate-950'
+                  }`}
                 >
-                  Start Match
+                  {selectedMode === 'TRAINING' ? 'Start Training' : 'Start Match'}
                 </button>
               </div>
             </div>
@@ -4616,9 +5076,12 @@ export default function App() {
       {hud.phase === 'PAUSED' && (
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/75 p-4">
           <div className="w-full max-w-sm bg-slate-900 border border-white/15 rounded-xl p-6 text-center shadow-2xl">
-            <h2 className="font-display text-2xl font-bold text-white">Match Paused</h2>
+            <h2 className="font-display text-2xl font-bold text-white">
+              {hud.mode === 'TRAINING' ? 'Training Paused' : 'Match Paused'}
+            </h2>
             <p className="text-sm text-slate-400 mt-1">
-              {p1Spec.name} vs {p2Spec.name} · {MAP_SPECS[hud.mapId].name}
+              {p1Spec.name} vs {hud.mode === 'TRAINING' ? 'Training Dummy' : p2Spec.name} ·{' '}
+              {MAP_SPECS[hud.mapId].name}
             </p>
 
             <div className="mt-6 flex flex-col gap-2.5">
@@ -4627,14 +5090,14 @@ export default function App() {
                 onClick={togglePause}
                 className="w-full py-2.5 px-4 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm transition-colors cursor-pointer"
               >
-                Resume Match
+                {hud.mode === 'TRAINING' ? 'Resume Training' : 'Resume Match'}
               </button>
               <button
                 type="button"
                 onClick={startMatch}
                 className="w-full py-2.5 px-4 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-semibold text-sm border border-white/10 transition-colors cursor-pointer"
               >
-                Restart Match
+                {hud.mode === 'TRAINING' ? 'Restart Training' : 'Restart Match'}
               </button>
               <button
                 type="button"
@@ -4703,7 +5166,8 @@ function FighterHudCard({
 }) {
   const hpPct = Math.max(0, Math.min(100, (player.hp / player.maxHp) * 100));
   const ultReady = player.ultCharge >= 100;
-  const tag = player.slot === 0 ? 'P1' : player.isAi ? 'CPU' : 'P2';
+  const tag = player.isDummy ? 'DUMMY' : player.slot === 0 ? 'P1' : player.isAi ? 'CPU' : 'P2';
+  const accentColor = player.isDummy ? '#34D399' : spec.accentColor;
 
   const activeStatuses: string[] = [];
   if (player.confused) activeStatuses.push('Confused');
@@ -4725,7 +5189,7 @@ function FighterHudCard({
         <div className="flex items-baseline gap-1.5 min-w-0">
           <span
             className="font-mono-num text-xs font-bold shrink-0"
-            style={{ color: spec.accentColor }}
+            style={{ color: accentColor }}
           >
             {tag}
           </span>
@@ -4734,26 +5198,32 @@ function FighterHudCard({
           </span>
         </div>
 
-        <div className="flex items-center gap-1 shrink-0" aria-label={`${player.stocks} hearts remaining`}>
-          {Array.from({ length: STARTING_STOCKS }).map((_, idx) => {
-            const filled = idx < player.stocks;
-            return (
-              <svg
-                key={idx}
-                viewBox="0 0 24 24"
-                className="w-3.5 h-3.5"
-                aria-hidden="true"
-              >
-                <path
-                  d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"
-                  fill={filled ? '#EF4444' : 'rgba(148,163,184,0.2)'}
-                  stroke={filled ? '#FCA5A5' : 'rgba(148,163,184,0.35)'}
-                  strokeWidth="1.5"
-                />
-              </svg>
-            );
-          })}
-        </div>
+        {player.isDummy ? (
+          <span className="font-mono-num text-[11px] font-semibold text-emerald-300 shrink-0">
+            Static Target
+          </span>
+        ) : (
+          <div className="flex items-center gap-1 shrink-0" aria-label={`${player.stocks} hearts remaining`}>
+            {Array.from({ length: STARTING_STOCKS }).map((_, idx) => {
+              const filled = idx < player.stocks;
+              return (
+                <svg
+                  key={idx}
+                  viewBox="0 0 24 24"
+                  className="w-3.5 h-3.5"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"
+                    fill={filled ? '#EF4444' : 'rgba(148,163,184,0.2)'}
+                    stroke={filled ? '#FCA5A5' : 'rgba(148,163,184,0.35)'}
+                    strokeWidth="1.5"
+                  />
+                </svg>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="mt-2 h-2.5 w-full bg-slate-800 rounded-full overflow-hidden">
@@ -4761,7 +5231,7 @@ function FighterHudCard({
           className="h-full transition-[width] duration-75"
           style={{
             width: `${hpPct}%`,
-            backgroundColor: hpPct > 35 ? spec.accentColor : '#EF4444',
+            backgroundColor: hpPct > 35 ? accentColor : '#EF4444',
           }}
         />
       </div>
@@ -4774,9 +5244,13 @@ function FighterHudCard({
         <span>
           HP {player.hp}/{player.maxHp}
         </span>
-        <span className={ultReady ? 'text-amber-300 font-bold' : 'text-slate-400'}>
-          ULT {ultReady ? 'READY' : `${player.ultCharge}%`}
-        </span>
+        {player.isDummy ? (
+          <span className="text-slate-400">Auto-Heals</span>
+        ) : (
+          <span className={ultReady ? 'text-amber-300 font-bold' : 'text-slate-400'}>
+            ULT {ultReady ? 'READY' : `${player.ultCharge}%`}
+          </span>
+        )}
         <span className="text-slate-400">
           {activeStatuses.length > 0 ? activeStatuses.join(' · ') : formatAnimLabel(player.animState)}
         </span>

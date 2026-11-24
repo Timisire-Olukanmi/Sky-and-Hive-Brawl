@@ -96,7 +96,8 @@ export function sanitizeMapSelection(value: unknown): MapSelection {
 }
 
 export function sanitizePlayMode(value: unknown): PlayMode {
-  return value === '2P_LOCAL' ? '2P_LOCAL' : '1P_AI';
+  if (value === '2P_LOCAL') return '2P_LOCAL';
+  return '1P_AI';
 }
 
 export function sanitizePlayerRecord(value: unknown): PlayerRecord {

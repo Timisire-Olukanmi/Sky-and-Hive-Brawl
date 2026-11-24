@@ -84,6 +84,7 @@ export function usePersistentScoreboard(options: UsePersistentScoreboardOptions 
   }, []);
 
   const recordMatchResult = useCallback((winnerSlot: 0 | 1, mode: PlayMode) => {
+    if (mode === 'TRAINING') return;
     const prev = scoreboardRef.current;
     const opponentKey = mode === '1P_AI' ? 'cpu' : 'p2';
     const next: ScoreboardStats =

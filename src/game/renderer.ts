@@ -458,10 +458,84 @@ export function renderGameFrame(
     sCtx.restore();
   }
 
-  // 8. Crisp pixel overhead fighter tags (P1 / CPU / P2 & Taunt ULT +9%)
+  // 8. Crisp pixel overhead fighter tags (P1 / CPU / P2 / DUMMY & Taunt ULT +9%)
   for (const player of state.players) {
     if (player.stocks > 0 || player.animState === 'ko') {
       drawFighterPixelTags(sCtx, player, shakePxX, shakePxY);
+    }
+  }
+
+  // 8b. Floating damage numbers & live Training Dummy combo display
+  for (const fn of state.floatingNumbers) {
+    const t = Math.max(0, fn.life / fn.maxLife);
+    const alpha = Math.min(1, t * 2.2);
+    const fx = fn.x * WORLD_TO_PIXEL + shakePxX;
+    const fy = fn.y * WORLD_TO_PIXEL + shakePxY;
+    const fontSize = Math.round(9 * fn.scale);
+    sCtx.save();
+    sCtx.globalAlpha = alpha;
+    drawPixelLabel(
+      sCtx,
+      fn.text,
+      fx,
+      fy,
+      fn.color,
+      `800 ${fontSize}px "JetBrains Mono", monospace`
+    );
+    sCtx.restore();
+  }
+
+  if (state.mode === 'TRAINING' && state.players[1].isDummy) {
+    const p1 = state.players[0];
+    const dummy = state.players[1];
+    const activeCount =
+      p1.currentComboCount > 0
+        ? p1.currentComboCount
+        : p1.comboDisplayTimer > 0
+        ? p1.lastComboCount
+        : 0;
+    const activeDmg =
+      p1.currentComboCount > 0
+        ? p1.currentComboDamage
+        : p1.comboDisplayTimer > 0
+        ? p1.lastComboDamage
+        : 0;
+
+    if (activeCount >= 1) {
+      const fade =
+        p1.currentComboCount > 0 ? 1 : Math.min(1, p1.comboDisplayTimer / 0.8);
+      const pop =
+        p1.currentComboCount > 0 && p1.comboWindowTimer > 1.25
+          ? 1.5
+          : 0;
+      const cx = dummy.x * WORLD_TO_PIXEL + shakePxX;
+      const cy = (dummy.y - dummy.height - 54) * WORLD_TO_PIXEL + shakePxY - pop;
+      const comboColor =
+        activeCount >= 8
+          ? '#38BDF8'
+          : activeCount >= 4
+          ? '#FB923C'
+          : '#FBBF24';
+
+      sCtx.save();
+      sCtx.globalAlpha = fade;
+      drawPixelLabel(
+        sCtx,
+        `${activeCount} HIT${activeCount === 1 ? '' : 'S'}!`,
+        cx,
+        cy,
+        comboColor,
+        '800 11px "JetBrains Mono", monospace'
+      );
+      drawPixelLabel(
+        sCtx,
+        `${Math.round(activeDmg)} DMG`,
+        cx,
+        cy + 10,
+        '#F8FAFC',
+        '700 8px "JetBrains Mono", monospace'
+      );
+      sCtx.restore();
     }
   }
 
@@ -2183,12 +2257,14 @@ function drawFighter(
   sCtx.translate(stunWobble * WORLD_TO_PIXEL, 0);
   sCtx.scale(WORLD_TO_PIXEL * f.facing * f.squashX, WORLD_TO_PIXEL * f.squashY);
 
-  if (f.animState === 'hitstun') {
-    sCtx.rotate(-0.22);
-  } else if (f.animState === 'stunned') {
-    sCtx.rotate(Math.sin(time * 12) * 0.1);
-  } else if (f.animState === 'run') {
-    sCtx.rotate(0.08);
+  if (!f.isDummy) {
+    if (f.animState === 'hitstun') {
+      sCtx.rotate(-0.22);
+    } else if (f.animState === 'stunned') {
+      sCtx.rotate(Math.sin(time * 12) * 0.1);
+    } else if (f.animState === 'run') {
+      sCtx.rotate(0.08);
+    }
   }
 
   drawFighterRigById(sCtx, f, time);
@@ -2300,11 +2376,22 @@ function drawFighterPixelTags(
   shakePxX: number,
   shakePxY: number
 ): void {
-  const tagLabel = f.slot === 0 ? 'P1' : f.isAi ? 'CPU' : 'P2';
-  const tagColor = f.slot === 0 ? '#FBBF24' : '#38BDF8';
+  const tagLabel = f.isDummy ? 'DUMMY' : f.slot === 0 ? 'P1' : f.isAi ? 'CPU' : 'P2';
+  const tagColor = f.isDummy ? '#34D399' : f.slot === 0 ? '#FBBF24' : '#38BDF8';
   const px = f.x * WORLD_TO_PIXEL + shakePxX;
   const py = (f.y - f.height - 26) * WORLD_TO_PIXEL + shakePxY;
   drawPixelLabel(stageCtx, tagLabel, px, py, tagColor, '700 8px "JetBrains Mono", monospace');
+
+  if (f.isDummy) {
+    drawPixelLabel(
+      stageCtx,
+      `${Math.max(0, Math.ceil(f.hp))}/${f.maxHp}`,
+      px,
+      py + 9,
+      '#E2E8F0',
+      '700 7px "JetBrains Mono", monospace'
+    );
+  }
 
   if (f.animState === 'taunt') {
     const p = f.animDuration > 0 ? Math.min(1, f.animTimer / f.animDuration) : 0;
@@ -3458,7 +3545,154 @@ function drawMarshalBoltRig(ctx: CanvasRenderingContext2D, f: FighterEntity, tim
   ctx.restore();
 }
 
+function drawTrainingDummyRig(ctx: CanvasRenderingContext2D, f: FighterEntity, time: number): void {
+  const wobble =
+    f.hitstunTimer > 0
+      ? Math.sin(f.hitstunTimer * 44) * 0.32
+      : f.stunTimer > 0
+      ? Math.sin(time * 20) * 0.12
+      : Math.sin(time * 2.2) * 0.025;
+
+  // Heavy Oak Ground Base (remains planted)
+  ctx.fillStyle = '#78350F';
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 2.6;
+  ctx.beginPath();
+  ctx.roundRect(-24, -10, 48, 10, 3);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = '#92400E';
+  ctx.fillRect(-18, -8, 36, 4);
+
+  // Tilting Post + Dummy Upper Body
+  ctx.save();
+  ctx.translate(0, -10);
+  ctx.rotate(wobble);
+
+  // Center Wooden Post
+  ctx.fillStyle = '#B45309';
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 2.5;
+  ctx.fillRect(-5, -62, 10, 62);
+  ctx.strokeRect(-5, -62, 10, 62);
+
+  // Horizontal Crossbar Arms
+  ctx.fillStyle = '#92400E';
+  ctx.fillRect(-34, -52, 68, 9);
+  ctx.strokeRect(-34, -52, 68, 9);
+
+  // Straw Tufts at Arm Ends
+  ctx.fillStyle = '#FACC15';
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(-34, -52);
+  ctx.lineTo(-42, -56);
+  ctx.lineTo(-39, -47);
+  ctx.lineTo(-42, -41);
+  ctx.lineTo(-34, -43);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(34, -52);
+  ctx.lineTo(42, -56);
+  ctx.lineTo(39, -47);
+  ctx.lineTo(42, -41);
+  ctx.lineTo(34, -43);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Burlap Sack Torso
+  ctx.fillStyle = '#D97706';
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 2.6;
+  ctx.beginPath();
+  ctx.roundRect(-20, -64, 40, 44, 9);
+  ctx.fill();
+  ctx.stroke();
+
+  // Highlight Belly Patch
+  ctx.fillStyle = '#F59E0B';
+  ctx.beginPath();
+  ctx.roundRect(-14, -59, 28, 34, 6);
+  ctx.fill();
+
+  // Painted Bullseye Target on Chest
+  ctx.fillStyle = '#FFFFFF';
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(0, -42, 11, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = '#EF4444';
+  ctx.beginPath();
+  ctx.arc(0, -42, 7.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#FFFFFF';
+  ctx.beginPath();
+  ctx.arc(0, -42, 3.8, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#EF4444';
+  ctx.beginPath();
+  ctx.arc(0, -42, 1.8, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Twine Neck Wrap
+  ctx.fillStyle = '#FEF08A';
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 2;
+  ctx.fillRect(-10, -68, 20, 6);
+  ctx.strokeRect(-10, -68, 20, 6);
+
+  // Burlap Sack Head
+  ctx.fillStyle = '#F59E0B';
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 2.6;
+  ctx.beginPath();
+  ctx.roundRect(-16, -94, 32, 27, 9);
+  ctx.fill();
+  ctx.stroke();
+
+  // Red Practice Headband
+  ctx.fillStyle = '#EF4444';
+  ctx.fillRect(-16, -88, 32, 5);
+  ctx.strokeRect(-16, -88, 32, 5);
+
+  // Stitched X Eyes & Patch Mouth
+  ctx.strokeStyle = '#18181B';
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.moveTo(-9, -80);
+  ctx.lineTo(-4, -75);
+  ctx.moveTo(-4, -80);
+  ctx.lineTo(-9, -75);
+  ctx.moveTo(4, -80);
+  ctx.lineTo(9, -75);
+  ctx.moveTo(9, -80);
+  ctx.lineTo(4, -75);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(-6, -71);
+  ctx.lineTo(6, -71);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
 function drawFighterRigById(ctx: CanvasRenderingContext2D, f: FighterEntity, time: number): void {
+  if (f.isDummy) {
+    drawTrainingDummyRig(ctx, f, time);
+    return;
+  }
   switch (f.id) {
     case 'honey_shell':
       drawHoneyShellRig(ctx, f, time);
@@ -4597,6 +4831,9 @@ function buildPreviewFighterEntity(
     slot,
     id,
     isAi: false,
+    isDummy: false,
+    dummyAnchorX: 0,
+    dummyAnchorY: 0,
     x: 0,
     y: 0,
     vx: 0,
@@ -4619,6 +4856,10 @@ function buildPreviewFighterEntity(
     hitsLanded: 0,
     longestCombo: 0,
     currentComboCount: 0,
+    currentComboDamage: 0,
+    lastComboCount: 0,
+    lastComboDamage: 0,
+    comboDisplayTimer: 0,
     comboWindowTimer: 0,
     peakSingleHit: 0,
     heavyHitsLanded: 0,

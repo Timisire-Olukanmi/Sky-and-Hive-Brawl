@@ -36,6 +36,7 @@ interface HomeScreenProps {
   p2Fighter: FighterId;
   onEnterArenaSetup: () => void;
   onQuickBattle: () => void;
+  onStartTraining: () => void;
   onOpenProfileModal: () => void;
   onOpenUpgradeModal: () => void;
   onUiClick?: () => void;
@@ -64,6 +65,7 @@ export function HomeScreen({
   p2Fighter,
   onEnterArenaSetup,
   onQuickBattle,
+  onStartTraining,
   onOpenProfileModal,
   onOpenUpgradeModal,
   onUiClick,
@@ -307,7 +309,7 @@ export function HomeScreen({
                   <div>
                     <div className="text-[11px] font-medium text-slate-400">Default Mode</div>
                     <div className="text-sm font-bold text-white mt-0.5 truncate">
-                      {(profile?.preferredMode ?? selectedMode) === '1P_AI' ? '1P vs CPU' : '2P Local'}
+                      {profile?.preferredMode === '2P_LOCAL' ? '2P Local' : '1P vs CPU'}
                     </div>
                   </div>
                 </div>
@@ -667,7 +669,12 @@ export function HomeScreen({
                     {p1Spec.name} vs {p2Spec.name}
                   </div>
                   <div className="text-[11px] text-slate-400 truncate">
-                    {selectedMode === '1P_AI' ? '1P vs CPU' : '2P Local'} · {mapLabel}
+                    {selectedMode === 'TRAINING'
+                      ? 'Training Dummy'
+                      : selectedMode === '1P_AI'
+                      ? '1P vs CPU'
+                      : '2P Local'}{' '}
+                    · {mapLabel}
                   </div>
                 </div>
               </div>
@@ -689,17 +696,29 @@ export function HomeScreen({
               <span>Enter Arena Setup</span>
               <ArrowRight className="w-4 h-4" aria-hidden="true" />
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                onUiClick?.();
-                onQuickBattle();
-              }}
-              className="w-full h-10 px-4 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs border border-white/15 flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Swords className="w-4 h-4 text-sky-400" aria-hidden="true" />
-              <span>Quick Battle Now</span>
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  onUiClick?.();
+                  onQuickBattle();
+                }}
+                className="w-full h-10 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs border border-white/15 flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Swords className="w-3.5 h-3.5 text-sky-400" aria-hidden="true" />
+                <span>Quick Battle</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onUiClick?.();
+                  onStartTraining();
+                }}
+                className="w-full h-10 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 text-emerald-300 font-bold text-xs border border-emerald-400/25 flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <span>Training Dummy</span>
+              </button>
+            </div>
           </div>
         </section>
       </main>

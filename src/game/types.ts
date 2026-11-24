@@ -1,6 +1,6 @@
 export type GamePhase = 'HOME' | 'TITLE_MENU' | 'PLAYING' | 'PAUSED' | 'GAME_OVER' | 'REPLAY';
 
-export type PlayMode = '1P_AI' | '2P_LOCAL';
+export type PlayMode = '1P_AI' | '2P_LOCAL' | 'TRAINING';
 
 export type FighterId =
   | 'honey_shell'
@@ -278,6 +278,9 @@ export interface FighterEntity {
   slot: 0 | 1;
   id: FighterId;
   isAi: boolean;
+  isDummy: boolean;
+  dummyAnchorX: number;
+  dummyAnchorY: number;
   x: number;
   y: number;
   vx: number;
@@ -301,6 +304,10 @@ export interface FighterEntity {
   hitsLanded: number;
   longestCombo: number;
   currentComboCount: number;
+  currentComboDamage: number;
+  lastComboCount: number;
+  lastComboDamage: number;
+  comboDisplayTimer: number;
   comboWindowTimer: number;
   peakSingleHit: number;
   heavyHitsLanded: number;
@@ -471,6 +478,20 @@ export interface GameEngineState {
   timedActions: TimedAction[];
   particles: ParticleEntity[];
   slashes: SlashEffect[];
+  floatingNumbers: FloatingNumberEntity[];
+}
+
+export interface FloatingNumberEntity {
+  id: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  text: string;
+  color: string;
+  scale: number;
+  life: number;
+  maxLife: number;
 }
 
 export interface HudFighterSnapshot {
@@ -478,6 +499,7 @@ export interface HudFighterSnapshot {
   id: FighterId;
   name: string;
   isAi: boolean;
+  isDummy: boolean;
   hp: number;
   maxHp: number;
   stocks: number;
@@ -493,6 +515,10 @@ export interface HudFighterSnapshot {
   koCount: number;
   hitsLanded: number;
   longestCombo: number;
+  currentComboCount: number;
+  currentComboDamage: number;
+  lastComboCount: number;
+  lastComboDamage: number;
   peakSingleHit: number;
   heavyHitsLanded: number;
 }
@@ -539,6 +565,7 @@ export interface ReplayFrame {
   zones: ZoneEntity[];
   slashes: SlashEffect[];
   activeParticles: ParticleEntity[];
+  floatingNumbers?: FloatingNumberEntity[];
 }
 
 export interface ReplayHudState {
