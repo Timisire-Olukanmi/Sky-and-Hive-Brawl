@@ -3546,12 +3546,31 @@ function drawMarshalBoltRig(ctx: CanvasRenderingContext2D, f: FighterEntity, tim
 }
 
 function drawTrainingDummyRig(ctx: CanvasRenderingContext2D, f: FighterEntity, time: number): void {
+  const moveLean = Math.max(-0.18, Math.min(0.18, f.vx * f.facing * 0.00045));
   const wobble =
     f.hitstunTimer > 0
       ? Math.sin(f.hitstunTimer * 44) * 0.32
       : f.stunTimer > 0
       ? Math.sin(time * 20) * 0.12
-      : Math.sin(time * 2.2) * 0.025;
+      : f.animState === 'recovery'
+      ? -0.08
+      : Math.sin(time * 2.2) * 0.025 + moveLean;
+
+  if (f.animState === 'recovery') {
+    ctx.save();
+    ctx.fillStyle = 'rgba(52, 211, 153, 0.35)';
+    ctx.beginPath();
+    ctx.ellipse(0, 6, 22, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#FEF08A';
+    ctx.beginPath();
+    ctx.moveTo(-12, 0);
+    ctx.lineTo(0, 18 + Math.sin(time * 40) * 4);
+    ctx.lineTo(12, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
 
   // Heavy Oak Ground Base (remains planted)
   ctx.fillStyle = '#78350F';

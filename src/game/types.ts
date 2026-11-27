@@ -1,6 +1,21 @@
-export type GamePhase = 'HOME' | 'TITLE_MENU' | 'PLAYING' | 'PAUSED' | 'GAME_OVER' | 'REPLAY';
+export type GamePhase =
+  | 'HOME'
+  | 'TITLE_MENU'
+  | 'ONLINE_CASUAL'
+  | 'ONLINE_RANKED'
+  | 'ONLINE_TOURNAMENT'
+  | 'PLAYING'
+  | 'PAUSED'
+  | 'GAME_OVER'
+  | 'REPLAY';
 
-export type PlayMode = '1P_AI' | '2P_LOCAL' | 'TRAINING';
+export type PlayMode =
+  | '1P_AI'
+  | '2P_LOCAL'
+  | 'TRAINING'
+  | 'ONLINE_CASUAL'
+  | 'ONLINE_RANKED'
+  | 'ONLINE_TOURNAMENT';
 
 export type FighterId =
   | 'honey_shell'
@@ -337,7 +352,7 @@ export interface FighterEntity {
   squashY: number;
 
   aiDecisionTimer: number;
-  aiDesiredAction: 'approach' | 'retreat' | 'jump' | 'idle';
+  aiDesiredAction: 'approach' | 'retreat' | 'jump' | 'idle' | 'roam_left' | 'roam_right';
 }
 
 export interface ProjectileEntity {

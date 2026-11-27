@@ -80,6 +80,70 @@ service cloud.firestore {
         && isValidPlayerRecord(sb.cpu);
     }
 
+    function isValidOnlineStats(stats) {
+      return stats is map
+        && stats.keys().hasAll([
+          'casualWins',
+          'casualLosses',
+          'rankedWins',
+          'rankedLosses',
+          'rankedPoints',
+          'rankedStreak'
+        ])
+        && stats.keys().hasOnly([
+          'casualWins',
+          'casualLosses',
+          'rankedWins',
+          'rankedLosses',
+          'rankedPoints',
+          'rankedStreak'
+        ])
+        && stats.casualWins is int && stats.casualWins >= 0 && stats.casualWins <= 1000000
+        && stats.casualLosses is int && stats.casualLosses >= 0 && stats.casualLosses <= 1000000
+        && stats.rankedWins is int && stats.rankedWins >= 0 && stats.rankedWins <= 1000000
+        && stats.rankedLosses is int && stats.rankedLosses >= 0 && stats.rankedLosses <= 1000000
+        && stats.rankedPoints is int && stats.rankedPoints >= 0 && stats.rankedPoints <= 10000
+        && stats.rankedStreak is int && stats.rankedStreak >= 0 && stats.rankedStreak <= 1000000;
+    }
+
+    function isValidTournamentStats(stats) {
+      return stats is map
+        && stats.keys().hasAll([
+          'cycleId',
+          'points',
+          'wins',
+          'losses',
+          'streak',
+          'bestPoints',
+          'careerWins',
+          'careerLosses',
+          'trophies'
+        ])
+        && stats.keys().hasOnly([
+          'cycleId',
+          'points',
+          'wins',
+          'losses',
+          'streak',
+          'bestPoints',
+          'careerWins',
+          'careerLosses',
+          'trophies'
+        ])
+        && stats.cycleId is string
+        && stats.cycleId.size() >= 1
+        && stats.cycleId.size() <= 32
+        && stats.cycleId.matches('^(cycle_[0-9]+|none)$')
+        && stats.points is int && stats.points >= 0 && stats.points <= 100000
+        && stats.wins is int && stats.wins >= 0 && stats.wins <= 1000000
+        && stats.losses is int && stats.losses >= 0 && stats.losses <= 1000000
+        && stats.streak is int && stats.streak >= 0 && stats.streak <= 1000000
+        && stats.bestPoints is int && stats.bestPoints >= 0 && stats.bestPoints <= 100000
+        && stats.careerWins is int && stats.careerWins >= 0 && stats.careerWins <= 1000000
+        && stats.careerLosses is int && stats.careerLosses >= 0 && stats.careerLosses <= 1000000
+        && stats.trophies is int && stats.trophies >= 0 && stats.trophies <= 1000000;
+    }
+
     function isValidUserProfile(data, userId) {
       return data.keys().hasAll([
           'uid',
@@ -98,6 +162,8 @@ service cloud.firestore {
           'defaultMap',
           'preferredMode',
           'scoreboard',
+          'onlineStats',
+          'tournamentStats',
           'createdAt',
           'updatedAt'
         ])
@@ -117,6 +183,8 @@ service cloud.firestore {
         && data.preferredMode.size() <= 16
         && isValidPlayMode(data.preferredMode)
         && isValidScoreboard(data.scoreboard)
+        && (!('onlineStats' in data) || isValidOnlineStats(data.onlineStats))
+        && (!('tournamentStats' in data) || isValidTournamentStats(data.tournamentStats))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -185,6 +253,18 @@ service cloud.firestore {
           // Action: Update or reset lifetime scoreboard stats
           incoming().diff(existing()).affectedKeys().hasOnly([
             'scoreboard',
+            'updatedAt'
+          ])
+          ||
+          // Action: Update online casual/ranked stats and RP
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'onlineStats',
+            'updatedAt'
+          ])
+          ||
+          // Action: Update bi-weekly tournament stats and cycle score
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'tournamentStats',
             'updatedAt'
           ])
           ||

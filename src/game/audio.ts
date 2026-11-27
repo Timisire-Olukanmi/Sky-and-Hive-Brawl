@@ -1,13 +1,23 @@
 class SoundSynth {
   private ctx: AudioContext | null = null;
+  private sfxGain: GainNode | null = null;
+  private noiseBuffer: AudioBuffer | null = null;
   private muted = false;
+  private volume = 0.85;
 
-  private ensureContext(): AudioContext | null {
-    if (this.muted || typeof window === 'undefined') return null;
+  public getOrCreateContext(): AudioContext | null {
+    if (typeof window === 'undefined') return null;
     if (!this.ctx) {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       if (!AudioCtx) return null;
       this.ctx = new AudioCtx();
+    }
+    if (!this.sfxGain && this.ctx) {
+      this.sfxGain = this.ctx.createGain();
+      this.sfxGain.gain.setValueAtTime(this.muted ? 0 : this.volume, this.ctx.currentTime);
+      this.sfxGain.connect(this.ctx.destination);
     }
     if (this.ctx.state === 'suspended') {
       this.ctx.resume().catch(() => {});
@@ -15,17 +25,62 @@ class SoundSynth {
     return this.ctx;
   }
 
+  public resumeContext(): void {
+    if (this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume().catch(() => {});
+    }
+  }
+
+  public getNoiseBuffer(): AudioBuffer | null {
+    const ctx = this.getOrCreateContext();
+    if (!ctx) return null;
+    if (!this.noiseBuffer) {
+      const len = Math.floor(ctx.sampleRate * 0.5);
+      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) {
+        data[i] = Math.random() * 2 - 1;
+      }
+      this.noiseBuffer = buf;
+    }
+    return this.noiseBuffer;
+  }
+
+  private ensureContext(): { ctx: AudioContext; bus: GainNode } | null {
+    if (this.muted || this.volume <= 0.001 || typeof window === 'undefined') return null;
+    const ctx = this.getOrCreateContext();
+    if (!ctx || !this.sfxGain) return null;
+    return { ctx, bus: this.sfxGain };
+  }
+
+  private syncGain(): void {
+    if (!this.ctx || !this.sfxGain) return;
+    const target = this.muted ? 0 : this.volume;
+    this.sfxGain.gain.setTargetAtTime(target, this.ctx.currentTime, 0.015);
+  }
+
   public setMuted(muted: boolean): void {
     this.muted = muted;
+    this.syncGain();
   }
 
   public isMuted(): boolean {
     return this.muted;
   }
 
+  public setVolume(volume: number): void {
+    this.volume = Math.max(0, Math.min(1, Number.isFinite(volume) ? volume : 0.85));
+    this.syncGain();
+  }
+
+  public getVolume(): number {
+    return this.volume;
+  }
+
   public playJump(doubleJump = false): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -36,14 +91,15 @@ class SoundSynth {
     gain.gain.setValueAtTime(0.11, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(bus);
     osc.start(now);
     osc.stop(now + 0.13);
   }
 
   public playAttack(heavy = false): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -53,14 +109,15 @@ class SoundSynth {
     gain.gain.setValueAtTime(heavy ? 0.14 : 0.09, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + (heavy ? 0.17 : 0.1));
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(bus);
     osc.start(now);
     osc.stop(now + (heavy ? 0.18 : 0.11));
   }
 
   public playHit(heavy = false): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
 
     const osc = ctx.createOscillator();
@@ -71,14 +128,15 @@ class SoundSynth {
     gain.gain.setValueAtTime(heavy ? 0.22 : 0.14, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + (heavy ? 0.2 : 0.12));
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(bus);
     osc.start(now);
     osc.stop(now + (heavy ? 0.21 : 0.13));
   }
 
   public playSpecial(isHoney: boolean): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -88,14 +146,15 @@ class SoundSynth {
     gain.gain.setValueAtTime(0.13, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.19);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(bus);
     osc.start(now);
     osc.stop(now + 0.2);
   }
 
   public playUltimate(): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     const freqs = [130, 195, 260];
     freqs.forEach((f, idx) => {
@@ -108,15 +167,16 @@ class SoundSynth {
       gain.gain.setValueAtTime(0.09, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.54);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(bus);
       osc.start(now);
       osc.stop(now + 0.55);
     });
   }
 
   public playKO(): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -126,14 +186,15 @@ class SoundSynth {
     gain.gain.setValueAtTime(0.22, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(bus);
     osc.start(now);
     osc.stop(now + 0.46);
   }
 
   public playUiClick(): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -143,14 +204,15 @@ class SoundSynth {
     gain.gain.setValueAtTime(0.06, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(bus);
     osc.start(now);
     osc.stop(now + 0.07);
   }
 
   public playCloudWall(): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -160,14 +222,15 @@ class SoundSynth {
     gain.gain.setValueAtTime(0.18, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.24);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(bus);
     osc.start(now);
     osc.stop(now + 0.25);
   }
 
   public playStun(): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -178,14 +241,15 @@ class SoundSynth {
     gain.gain.setValueAtTime(0.11, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.23);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(bus);
     osc.start(now);
     osc.stop(now + 0.24);
   }
 
   public playPoisonTick(): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -195,14 +259,15 @@ class SoundSynth {
     gain.gain.setValueAtTime(0.06, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(bus);
     osc.start(now);
     osc.stop(now + 0.1);
   }
 
   public playRecovery(): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -212,14 +277,15 @@ class SoundSynth {
     gain.gain.setValueAtTime(0.14, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.21);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(bus);
     osc.start(now);
     osc.stop(now + 0.22);
   }
 
   public playChargeTelegraph(): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -230,14 +296,15 @@ class SoundSynth {
     gain.gain.linearRampToValueAtTime(0.14, now + 0.44);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(bus);
     osc.start(now);
     osc.stop(now + 0.52);
   }
 
   public playBouncePad(): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -247,14 +314,15 @@ class SoundSynth {
     gain.gain.setValueAtTime(0.13, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(bus);
     osc.start(now);
     osc.stop(now + 0.19);
   }
 
   public playHazardHit(): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -264,14 +332,15 @@ class SoundSynth {
     gain.gain.setValueAtTime(0.16, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(bus);
     osc.start(now);
     osc.stop(now + 0.23);
   }
 
   public playTvBlare(): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     [320, 485].forEach((freq, i) => {
       const osc = ctx.createOscillator();
@@ -283,15 +352,16 @@ class SoundSynth {
       gain.gain.setValueAtTime(0.09, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(bus);
       osc.start(now);
       osc.stop(now + 0.29);
     });
   }
 
   public playLaserShot(): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -301,14 +371,15 @@ class SoundSynth {
     gain.gain.setValueAtTime(0.11, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(bus);
     osc.start(now);
     osc.stop(now + 0.19);
   }
 
   public playTaunt(fighterId: string): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     const patterns: Record<string, { freqs: number[]; type: OscillatorType }> = {
       honey_shell: { freqs: [460, 620, 780], type: 'triangle' },
@@ -333,15 +404,16 @@ class SoundSynth {
       gain.gain.setValueAtTime(0.075, t);
       gain.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(bus);
       osc.start(t);
       osc.stop(t + 0.08);
     });
   }
 
   public playTauntBoost(): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -351,14 +423,15 @@ class SoundSynth {
     gain.gain.setValueAtTime(0.08, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(bus);
     osc.start(now);
     osc.stop(now + 0.15);
   }
 
   public playCrackHit(): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -368,14 +441,15 @@ class SoundSynth {
     gain.gain.setValueAtTime(0.11, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(bus);
     osc.start(now);
     osc.stop(now + 0.1);
   }
 
   public playStructureBreak(): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     [130, 82].forEach((freq, idx) => {
       const osc = ctx.createOscillator();
@@ -386,15 +460,16 @@ class SoundSynth {
       gain.gain.setValueAtTime(0.15, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(bus);
       osc.start(now);
       osc.stop(now + 0.27);
     });
   }
 
   public playHoverCarPass(): void {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
+    const audio = this.ensureContext();
+    if (!audio) return;
+    const { ctx, bus } = audio;
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -406,7 +481,7 @@ class SoundSynth {
     gain.gain.linearRampToValueAtTime(0.13, now + 0.15);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(bus);
     osc.start(now);
     osc.stop(now + 0.4);
   }

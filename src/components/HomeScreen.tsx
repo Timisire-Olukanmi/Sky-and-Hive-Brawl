@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import {
   AlertCircle,
   ArrowRight,
@@ -22,14 +22,32 @@ import { FIGHTER_SPECS, MAP_SPECS } from '../game/constants';
 import type { FighterId, PlayMode } from '../game/types';
 import { useFirebase } from '../contexts/FirebaseContext';
 import type { ScoreboardStats } from '../hooks/usePersistentScoreboard';
-import { ALL_FIGHTER_IDS, DISPLAY_NAME_MAX_LENGTH, type AuthProviderKind, type MapSelection } from '../types/account';
+import {
+  ALL_FIGHTER_IDS,
+  DISPLAY_NAME_MAX_LENGTH,
+  getRankTier,
+  type AuthProviderKind,
+  type MapSelection,
+  type OnlineStats,
+  type TournamentStats,
+} from '../types/account';
+import {
+  formatTournamentCountdown,
+  getTournamentScheduleStatus,
+} from '../game/tournamentSchedule';
+import type { TournamentStateSnapshot, WaitingAreaSnapshot } from '../game/onlineTypes';
 import { GitHubMark, GoogleMark } from './AccountBar';
 import { PixelFighterPortrait } from './PixelFighterPortrait';
+import { TournamentToastSystem } from './TournamentToastSystem';
 
 type HomeAuthTab = 'signup' | 'signin' | 'reset';
 
 interface HomeScreenProps {
   scoreboard: ScoreboardStats;
+  onlineStats: OnlineStats;
+  tournamentStats: TournamentStats;
+  waitingSnapshot: WaitingAreaSnapshot;
+  tournamentSnapshot?: TournamentStateSnapshot;
   selectedMode: PlayMode;
   selectedMap: MapSelection;
   p1Fighter: FighterId;
@@ -37,6 +55,9 @@ interface HomeScreenProps {
   onEnterArenaSetup: () => void;
   onQuickBattle: () => void;
   onStartTraining: () => void;
+  onOpenCasualLounge: () => void;
+  onOpenRankedArena: () => void;
+  onOpenTournamentArena: () => void;
   onOpenProfileModal: () => void;
   onOpenUpgradeModal: () => void;
   onUiClick?: () => void;
@@ -59,6 +80,10 @@ function formatProviderLabel(provider?: AuthProviderKind): string {
 
 export function HomeScreen({
   scoreboard,
+  onlineStats,
+  tournamentStats,
+  waitingSnapshot,
+  tournamentSnapshot,
   selectedMode,
   selectedMap,
   p1Fighter,
@@ -66,6 +91,9 @@ export function HomeScreen({
   onEnterArenaSetup,
   onQuickBattle,
   onStartTraining,
+  onOpenCasualLounge,
+  onOpenRankedArena,
+  onOpenTournamentArena,
   onOpenProfileModal,
   onOpenUpgradeModal,
   onUiClick,
@@ -96,6 +124,26 @@ export function HomeScreen({
   const [showPassword, setShowPassword] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [resetSent, setResetSent] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  const [serverOffsetMs, setServerOffsetMs] = useState(0);
+
+  useEffect(() => {
+    if (tournamentSnapshot?.serverNowMs) {
+      setServerOffsetMs(tournamentSnapshot.serverNowMs - Date.now());
+    }
+  }, [tournamentSnapshot?.serverNowMs]);
+
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const tournamentSchedule = getTournamentScheduleStatus(nowMs + serverOffsetMs);
+  const currentCycleTp =
+    tournamentStats.cycleId === tournamentSchedule.cycleId && tournamentSchedule.isActive
+      ? tournamentStats.points
+      : 0;
 
   const isBusy = authPendingProvider !== null;
   const activeError = localError || authError?.message || null;
@@ -685,6 +733,74 @@ export function HomeScreen({
           </div>
 
           <div className="flex flex-col gap-2 pt-2 border-t border-white/10">
+            {/* Online First-to-Three Modes: Strictly Isolated Casual Lounge vs Ranked Arena */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  onUiClick?.();
+                  onOpenCasualLounge();
+                }}
+                className="w-full px-3 py-2 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 text-left border border-sky-400/40 transition-colors cursor-pointer"
+              >
+                <div className="text-xs font-extrabold text-sky-300 whitespace-nowrap">
+                  Online Casuals · FT3
+                </div>
+                <div className="text-[11px] font-mono-num text-slate-300 mt-0.5 truncate">
+                  {waitingSnapshot.casualWaiting.length} waiting · {onlineStats.casualWins}W-
+                  {onlineStats.casualLosses}L
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  onUiClick?.();
+                  onOpenRankedArena();
+                }}
+                className="w-full px-3 py-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-left border border-amber-400/45 transition-colors cursor-pointer"
+              >
+                <div className="text-xs font-extrabold text-amber-300 whitespace-nowrap">
+                  Online Ranked · FT3
+                </div>
+                <div className="text-[11px] font-mono-num text-slate-300 mt-0.5 truncate">
+                  {waitingSnapshot.rankedWaiting.length} waiting ·{' '}
+                  <span style={{ color: getRankTier(onlineStats.rankedPoints).color }}>
+                    {getRankTier(onlineStats.rankedPoints).name}
+                  </span>{' '}
+                  {onlineStats.rankedPoints} RP
+                </div>
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                onUiClick?.();
+                onOpenTournamentArena();
+              }}
+              className={`w-full px-3 py-2 rounded-lg text-left border transition-colors cursor-pointer flex items-center justify-between gap-3 ${
+                tournamentSchedule.isActive
+                  ? 'bg-gradient-to-r from-amber-500/20 to-rose-500/15 hover:from-amber-500/30 hover:to-rose-500/25 border-amber-400/50'
+                  : 'bg-slate-900/90 hover:bg-slate-800 border-white/15'
+              }`}
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 text-xs font-extrabold text-amber-300 whitespace-nowrap">
+                  <Trophy className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                  <span>Bi-Weekly Tournament · {tournamentSchedule.isActive ? 'LIVE NOW' : 'CLOSED'}</span>
+                </div>
+                <div className="text-[11px] font-mono-num text-slate-300 mt-0.5 truncate">
+                  {tournamentSchedule.isActive
+                    ? `1 wk every 2 wks · Ends in ${formatTournamentCountdown(tournamentSchedule.msUntilTransition, false)} · ${waitingSnapshot.tournamentWaiting.length} waiting`
+                    : `1 wk every 2 wks · Opens in ${formatTournamentCountdown(tournamentSchedule.msUntilTransition, false)}`}
+                </div>
+              </div>
+              <div className="font-mono-num text-xs font-extrabold text-white shrink-0">
+                {currentCycleTp} TP
+              </div>
+            </button>
+
             <button
               type="button"
               onClick={() => {
@@ -693,7 +809,7 @@ export function HomeScreen({
               }}
               className="w-full h-11 px-4 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-sm flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
-              <span>Enter Arena Setup</span>
+              <span>Offline Arena Setup</span>
               <ArrowRight className="w-4 h-4" aria-hidden="true" />
             </button>
             <div className="grid grid-cols-2 gap-2">
@@ -726,6 +842,13 @@ export function HomeScreen({
       <footer className="text-xs text-slate-400 font-medium tracking-wide text-center shrink-0">
         WASD Move · W Jump · J Attacks · K Special · R (W+K) Recovery · L Ultimate · T Taunt · Esc Pause
       </footer>
+
+      <TournamentToastSystem
+        schedule={tournamentSchedule}
+        waitingCount={waitingSnapshot.tournamentWaiting.length}
+        onOpenTournamentArena={onOpenTournamentArena}
+        onUiClick={onUiClick}
+      />
     </div>
   );
 }

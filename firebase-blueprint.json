@@ -60,6 +60,14 @@
           "type": "object",
           "description": "Nested map containing p1, p2, and cpu records with integer wins, losses, and currentStreak."
         },
+        "onlineStats": {
+          "type": "object",
+          "description": "Optional nested map containing casualWins, casualLosses, rankedWins, rankedLosses, rankedPoints, and rankedStreak."
+        },
+        "tournamentStats": {
+          "type": "object",
+          "description": "Optional nested map tracking bi-weekly 7-day tournament cycleId, points, wins, losses, streak, bestPoints, careerWins, careerLosses, and trophies."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",

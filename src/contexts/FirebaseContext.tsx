@@ -39,18 +39,25 @@ import {
   handleFirestoreError,
   OperationType,
 } from '../firebase';
-import type { FighterId, PlayMode } from '../game/types';
+import type { FighterId } from '../game/types';
 import {
+  createEmptyOnlineStats,
   createEmptyScoreboard,
+  createEmptyTournamentStats,
   EMAIL_MAX_LENGTH,
   sanitizeDisplayName,
   sanitizeFighterId,
   sanitizeMapSelection,
+  sanitizeOnlineStats,
   sanitizePlayMode,
   sanitizeScoreboard,
+  sanitizeTournamentStats,
   type AuthProviderKind,
+  type LocalPlayMode,
   type MapSelection,
+  type OnlineStats,
   type ScoreboardStats,
+  type TournamentStats,
   type UserPrivateAccountDoc,
   type UserProfileDoc,
 } from '../types/account';
@@ -69,7 +76,7 @@ export interface ProfileUpdateInput {
   displayName: string;
   favoriteFighter: FighterId;
   defaultMap: MapSelection;
-  preferredMode: PlayMode;
+  preferredMode: LocalPlayMode;
 }
 
 interface FirebaseContextValue {
@@ -101,6 +108,8 @@ interface FirebaseContextValue {
   signOutUser: () => Promise<void>;
   updateUserProfile: (input: ProfileUpdateInput) => Promise<boolean>;
   saveCloudScoreboard: (stats: ScoreboardStats) => Promise<void>;
+  saveCloudOnlineStats: (stats: OnlineStats) => Promise<void>;
+  saveCloudTournamentStats: (stats: TournamentStats) => Promise<void>;
 }
 
 const FirebaseContext = createContext<FirebaseContextValue | null>(null);
@@ -279,6 +288,8 @@ export function FirebaseProvider({ children }: { children: ReactNode }) {
           defaultMap: 'hive_canopy',
           preferredMode: '1P_AI',
           scoreboard: seededScoreboard,
+          onlineStats: createEmptyOnlineStats(),
+          tournamentStats: createEmptyTournamentStats(),
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         };
@@ -406,6 +417,12 @@ export function FirebaseProvider({ children }: { children: ReactNode }) {
               defaultMap: sanitizeMapSelection(raw.defaultMap),
               preferredMode: sanitizePlayMode(raw.preferredMode),
               scoreboard: sanitizeScoreboard(raw.scoreboard),
+              onlineStats: raw.onlineStats
+                ? sanitizeOnlineStats(raw.onlineStats)
+                : createEmptyOnlineStats(),
+              tournamentStats: raw.tournamentStats
+                ? sanitizeTournamentStats(raw.tournamentStats)
+                : createEmptyTournamentStats(),
             };
             setProfile(sanitized);
             setSyncStatus('synced');
@@ -591,6 +608,44 @@ export function FirebaseProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const saveCloudOnlineStats = useCallback(async (stats: OnlineStats): Promise<void> => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) return;
+
+    const cleanStats = sanitizeOnlineStats(stats);
+    const profilePath = `users/${currentUser.uid}`;
+    setSyncStatus('syncing');
+    try {
+      await updateDoc(doc(db, 'users', currentUser.uid), {
+        onlineStats: cleanStats,
+        updatedAt: serverTimestamp(),
+      });
+      setSyncStatus('synced');
+    } catch (error) {
+      setSyncStatus('error');
+      handleFirestoreError(error, OperationType.UPDATE, profilePath);
+    }
+  }, []);
+
+  const saveCloudTournamentStats = useCallback(async (stats: TournamentStats): Promise<void> => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) return;
+
+    const cleanStats = sanitizeTournamentStats(stats);
+    const profilePath = `users/${currentUser.uid}`;
+    setSyncStatus('syncing');
+    try {
+      await updateDoc(doc(db, 'users', currentUser.uid), {
+        tournamentStats: cleanStats,
+        updatedAt: serverTimestamp(),
+      });
+      setSyncStatus('synced');
+    } catch (error) {
+      setSyncStatus('error');
+      handleFirestoreError(error, OperationType.UPDATE, profilePath);
+    }
+  }, []);
+
   const value = useMemo<FirebaseContextValue>(
     () => ({
       user,
@@ -613,6 +668,8 @@ export function FirebaseProvider({ children }: { children: ReactNode }) {
       signOutUser,
       updateUserProfile,
       saveCloudScoreboard,
+      saveCloudOnlineStats,
+      saveCloudTournamentStats,
     }),
     [
       authError,
@@ -625,7 +682,9 @@ export function FirebaseProvider({ children }: { children: ReactNode }) {
       profile,
       profileLoading,
       registerWithEmail,
+      saveCloudOnlineStats,
       saveCloudScoreboard,
+      saveCloudTournamentStats,
       sendPasswordReset,
       signInAsGuest,
       signInWithEmail,

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Volume2, VolumeX, Pause, Play, RotateCcw, Film, FastForward, ArrowLeft, Trophy, Shuffle, Home } from 'lucide-react';
+import { Volume2, VolumeX, Pause, Play, RotateCcw, Film, FastForward, ArrowLeft, Trophy, Shuffle, Home, LogOut, SlidersHorizontal, X } from 'lucide-react';
 import {
   AIR_DRAG,
   BLAST_ZONE,
@@ -16,17 +16,50 @@ import {
   WORLD_WIDTH,
 } from './game/constants';
 import { soundSynth } from './game/audio';
+import {
+  loadAudioPreferences,
+  saveAudioPreferences,
+  stageMusic,
+} from './game/music';
 import { analyzeMatchFeats, formatMatchDuration } from './game/matchAnalysis';
+import {
+  ONLINE_ROUND_STOCKS,
+  TARGET_SERIES_WINS,
+  type OnlineInputActions,
+  type OnlineQueueType,
+  type SerializedEngineSnapshot,
+  type SoundEvent,
+  type WaitingAreaKind,
+} from './game/onlineTypes';
+import {
+  DEFAULT_TRAINING_DUMMY_CONFIG,
+  DUMMY_BASE_MOVE_SPEED,
+  DUMMY_JUMP_VELOCITY,
+  DUMMY_RECOVERY_VY,
+  computeTrainingDummyControls,
+  type TrainingDummyConfig,
+} from './game/trainingDummy';
 import { renderGameFrame, renderWinnersPodiumStage } from './game/renderer';
 import { AccountBar } from './components/AccountBar';
 import { AuthModal } from './components/AuthModal';
 import { HomeScreen } from './components/HomeScreen';
+import { OnlineCasualScreen } from './components/OnlineCasualScreen';
+import { OnlineRankedScreen } from './components/OnlineRankedScreen';
+import { OnlineTournamentScreen } from './components/OnlineTournamentScreen';
 import { PersistentScoreboard } from './components/PersistentScoreboard';
 import { PixelFighterPortrait } from './components/PixelFighterPortrait';
 import { ProfileModal } from './components/ProfileModal';
+import { TrainingConfigPanel } from './components/TrainingConfigPanel';
+import { AudioSettingsControls } from './components/AudioSettingsControls';
 import { useFirebase } from './contexts/FirebaseContext';
+import {
+  useOnlineMultiplayer,
+  type ActiveOnlineMatchInfo,
+  type OnlineSeriesResult,
+} from './hooks/useOnlineMultiplayer';
+import { useOnlineStats } from './hooks/useOnlineStats';
 import { usePersistentScoreboard } from './hooks/usePersistentScoreboard';
-import { ALL_MAP_IDS, type MapSelection } from './types/account';
+import { ALL_MAP_IDS, getRankTier, type MapSelection } from './types/account';
 import type {
   AnimState,
   DestructiblePropRuntime,
@@ -408,6 +441,114 @@ function formatReplayInputBadges(inp: ReplayInputState): string[] {
   return tags;
 }
 
+function playSoundEvents(sounds: SoundEvent[]): void {
+  for (let i = 0; i < sounds.length; i++) {
+    const ev = sounds[i];
+    switch (ev.type) {
+      case 'uiClick':
+        soundSynth.playUiClick();
+        break;
+      case 'attack':
+        soundSynth.playAttack(ev.heavy);
+        break;
+      case 'hit':
+        soundSynth.playHit(ev.heavy);
+        break;
+      case 'ko':
+        soundSynth.playKO();
+        break;
+      case 'jump':
+        soundSynth.playJump(ev.double);
+        break;
+      case 'special':
+        soundSynth.playSpecial(ev.isProj);
+        break;
+      case 'ultimate':
+        soundSynth.playUltimate();
+        break;
+      case 'recovery':
+        soundSynth.playRecovery();
+        break;
+      case 'stun':
+        soundSynth.playStun();
+        break;
+      case 'cloudWall':
+        soundSynth.playCloudWall();
+        break;
+      case 'chargeTelegraph':
+        soundSynth.playChargeTelegraph();
+        break;
+      case 'tvBlare':
+        soundSynth.playTvBlare();
+        break;
+      case 'laserShot':
+        soundSynth.playLaserShot();
+        break;
+      case 'taunt':
+        soundSynth.playTaunt(ev.fighterId);
+        break;
+      case 'tauntBoost':
+        soundSynth.playTauntBoost();
+        break;
+      case 'poisonTick':
+        soundSynth.playPoisonTick();
+        break;
+      case 'bouncePad':
+        soundSynth.playBouncePad();
+        break;
+      case 'hazardHit':
+        soundSynth.playHazardHit();
+        break;
+      case 'crackHit':
+        soundSynth.playCrackHit();
+        break;
+      case 'structureBreak':
+        soundSynth.playStructureBreak();
+        break;
+      case 'hoverCarPass':
+        soundSynth.playHoverCarPass();
+        break;
+    }
+  }
+}
+
+function applyServerSnapshot(state: GameEngineState, snap: SerializedEngineSnapshot): void {
+  state.mode = snap.mode;
+  state.mapId = snap.mapId;
+  state.matchTime = snap.matchTime;
+  state.ambientTime = snap.ambientTime;
+  state.hitstopTimer = snap.hitstopTimer;
+  state.shakeIntensity = snap.shakeIntensity;
+  state.lightningFlash = snap.lightningFlash;
+  state.windForceX = snap.windForceX;
+  state.winnerSlot = snap.winnerSlot;
+  state.players = [{ ...snap.players[0] }, { ...snap.players[1] }];
+  state.platforms = snap.platforms.map((p) => ({
+    ...p,
+    motion: p.motion ? { ...p.motion } : undefined,
+    scars: p.scars ? [...p.scars] : undefined,
+  }));
+  state.obstacles = snap.obstacles.map((o) => ({
+    ...o,
+    hitCooldowns: [o.hitCooldowns[0], o.hitCooldowns[1]],
+  }));
+  state.destructibles = snap.destructibles.map((d) => ({ ...d }));
+  state.projectiles = snap.projectiles.map((p) => ({ ...p }));
+  state.zones = snap.zones.map((z) => ({
+    ...z,
+    hitTimers: [z.hitTimers[0], z.hitTimers[1]],
+  }));
+  state.slashes = snap.slashes.map((s) => ({ ...s }));
+  state.floatingNumbers = snap.floatingNumbers.map((fn) => ({ ...fn }));
+  for (let i = 0; i < state.particles.length; i++) {
+    if (i < snap.activeParticles.length) {
+      state.particles[i] = { ...snap.activeParticles[i], active: true };
+    } else {
+      state.particles[i].active = false;
+    }
+  }
+}
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -416,7 +557,19 @@ export default function App() {
   const [selectedMap, setSelectedMap] = useState<MapSelection>('hive_canopy');
   const [p1Fighter, setP1Fighter] = useState<FighterId>('honey_shell');
   const [p2Fighter, setP2Fighter] = useState<FighterId>('spidra');
-  const [muted, setMuted] = useState(false);
+  const initialAudioPrefsRef = useRef(loadAudioPreferences());
+  const [musicVolume, setMusicVolume] = useState<number>(initialAudioPrefsRef.current.musicVolume);
+  const [sfxVolume, setSfxVolume] = useState<number>(initialAudioPrefsRef.current.sfxVolume);
+  const [muted, setMuted] = useState<boolean>(initialAudioPrefsRef.current.muted);
+  const [audioSettingsOpen, setAudioSettingsOpen] = useState(false);
+  const audioSettingsOpenRef = useRef(false);
+  audioSettingsOpenRef.current = audioSettingsOpen;
+
+  const [trainingDummyConfig, setTrainingDummyConfig] = useState<TrainingDummyConfig>(
+    () => ({ ...DEFAULT_TRAINING_DUMMY_CONFIG })
+  );
+  const trainingDummyConfigRef = useRef<TrainingDummyConfig>(trainingDummyConfig);
+  trainingDummyConfigRef.current = trainingDummyConfig;
 
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'signin' | 'signup' | 'upgrade'>('signin');
@@ -425,7 +578,8 @@ export default function App() {
   const modalOpenRef = useRef(false);
   modalOpenRef.current = authModalOpen || profileModalOpen;
 
-  const { user, profile, saveCloudScoreboard } = useFirebase();
+  const { user, profile, saveCloudScoreboard, saveCloudOnlineStats, saveCloudTournamentStats } =
+    useFirebase();
   const hydratedUidRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -449,6 +603,22 @@ export default function App() {
   const recordMatchResultRef = useRef(recordMatchResult);
   recordMatchResultRef.current = recordMatchResult;
   const matchRecordedRef = useRef<boolean>(false);
+
+  const { onlineStats, tournamentStats, recordOnlineSeriesResult } = useOnlineStats({
+    cloudOnlineStats: profile?.onlineStats,
+    cloudTournamentStats: profile?.tournamentStats,
+    isCloudAuthenticated: Boolean(user),
+    onSaveCloudOnlineStats: saveCloudOnlineStats,
+    onSaveCloudTournamentStats: saveCloudTournamentStats,
+  });
+  const recordOnlineSeriesRef = useRef(recordOnlineSeriesResult);
+  recordOnlineSeriesRef.current = recordOnlineSeriesResult;
+
+  const onlinePlayerName =
+    profile?.displayName ||
+    user?.displayName ||
+    user?.email?.split('@')[0] ||
+    (user?.isAnonymous ? 'Guest Fighter' : 'Fighter');
 
   const engineRef = useRef<GameEngineState>(
     createInitialEngineState('HOME', '1P_AI', 'hive_canopy', 'honey_shell', 'spidra')
@@ -488,6 +658,163 @@ export default function App() {
   const syncHudImmediate = useCallback(() => {
     setHud(buildHudSnapshot(engineRef.current));
   }, []);
+
+  const activeMatchRef = useRef<ActiveOnlineMatchInfo | null>(null);
+  const lastOnlineInputSentRef = useRef<{
+    moveDir: number;
+    jumpHeld: boolean;
+    downHeld: boolean;
+    atMs: number;
+  }>({ moveDir: 0, jumpHeld: false, downHeld: false, atMs: 0 });
+
+  const {
+    connected: wsConnected,
+    clientId: wsClientId,
+    waitingSnapshot,
+    tournamentSnapshot,
+    inQueue,
+    queuePosition,
+    queueEnteredAt,
+    activeMatch,
+    seriesResult,
+    errorMessage: wsErrorMessage,
+    enterWaitingArea,
+    joinQueue,
+    leaveQueue,
+    sendMatchInput,
+    leaveMatch,
+    clearSeriesResult,
+    clearError,
+  } = useOnlineMultiplayer({
+    onMatchStarted: (info) => {
+      soundSynth.playUiClick();
+      matchRecordedRef.current = false;
+      activeMatchRef.current = info;
+      const playMode: PlayMode =
+        info.queueType === 'ranked'
+          ? 'ONLINE_RANKED'
+          : info.queueType === 'tournament'
+          ? 'ONLINE_TOURNAMENT'
+          : 'ONLINE_CASUAL';
+      const next = createInitialEngineState(
+        'PLAYING',
+        playMode,
+        info.mapId,
+        info.players[0].fighterId,
+        info.players[1].fighterId
+      );
+      next.players[0].stocks = ONLINE_ROUND_STOCKS;
+      next.players[1].stocks = ONLINE_ROUND_STOCKS;
+      engineRef.current = next;
+      replayFramesRef.current = [];
+      victoryRecordTailRef.current = 0;
+      preReplayFrameRef.current = null;
+      replayKoOffsetsRef.current = [];
+      replayPlayingRef.current = false;
+      replayElapsedRef.current = 0;
+      setReplayAvailable(false);
+      setReplayDurationSec(0);
+      justPressedRef.current.clear();
+      syncHudImmediate();
+    },
+    onMatchState: (snap, sounds) => {
+      if (sounds.length > 0) {
+        playSoundEvents(sounds);
+      }
+      const engine = engineRef.current;
+      applyServerSnapshot(engine, snap);
+      engine.phase = 'PLAYING';
+      const buf = replayFramesRef.current;
+      buf.push(captureReplayFrame(engine, [{ ...EMPTY_REPLAY_INPUT }, { ...EMPTY_REPLAY_INPUT }], engine.matchTime));
+      const cutoff = engine.matchTime - 30;
+      while (buf.length > 1 && buf[0].matchTime < cutoff) {
+        buf.shift();
+      }
+      setHud(buildHudSnapshot(engine));
+    },
+    onSeriesOver: (result) => {
+      activeMatchRef.current = null;
+      const won = result.winnerSlot === result.yourSlot;
+      const newVal =
+        result.queueType === 'ranked'
+          ? result.newRp[result.yourSlot]
+          : result.queueType === 'tournament'
+          ? result.newTp[result.yourSlot]
+          : undefined;
+      recordOnlineSeriesRef.current(
+        result.queueType,
+        won,
+        newVal,
+        result.tournamentCycleId
+      );
+      const engine = engineRef.current;
+      engine.phase = 'GAME_OVER';
+      engine.winnerSlot = result.winnerSlot;
+      for (const slot of [0, 1] as const) {
+        const fp = result.finalPlayers[slot];
+        engine.players[slot].damageDealt = fp.damageDealt;
+        engine.players[slot].koCount = fp.koCount;
+        engine.players[slot].hitsLanded = fp.hitsLanded;
+        engine.players[slot].longestCombo = fp.longestCombo;
+        engine.players[slot].peakSingleHit = fp.peakSingleHit;
+        engine.players[slot].heavyHitsLanded = fp.heavyHitsLanded;
+        engine.players[slot].stocks = fp.stocks;
+      }
+      const frames = replayFramesRef.current;
+      if (frames.length >= 2) {
+        setReplayAvailable(true);
+        setReplayDurationSec(
+          Math.max(1, Math.round(frames[frames.length - 1].matchTime - frames[0].matchTime))
+        );
+      }
+      syncHudImmediate();
+    },
+  });
+
+  activeMatchRef.current = activeMatch;
+  const seriesResultRef = useRef<OnlineSeriesResult | null>(null);
+  seriesResultRef.current = seriesResult;
+  const sendMatchInputRef = useRef(sendMatchInput);
+  sendMatchInputRef.current = sendMatchInput;
+
+  useEffect(() => {
+    if (activeMatch || seriesResult) return;
+    const area: WaitingAreaKind =
+      hud.phase === 'ONLINE_CASUAL'
+        ? 'casual'
+        : hud.phase === 'ONLINE_RANKED'
+        ? 'ranked'
+        : hud.phase === 'ONLINE_TOURNAMENT'
+        ? 'tournament'
+        : 'none';
+    enterWaitingArea(area, {
+      accountUid: user?.uid,
+      displayName: onlinePlayerName,
+      fighterId: p1Fighter,
+      preferredMap: area === 'ranked' || area === 'tournament' ? 'random' : selectedMap,
+      rankedPoints: onlineStats.rankedPoints,
+      tournamentPoints: tournamentStats.points,
+      tournamentWins: tournamentStats.wins,
+      tournamentLosses: tournamentStats.losses,
+      tournamentStreak: tournamentStats.streak,
+      tournamentCycleId: tournamentStats.cycleId,
+    });
+  }, [
+    activeMatch,
+    enterWaitingArea,
+    hud.phase,
+    onlinePlayerName,
+    onlineStats.rankedPoints,
+    p1Fighter,
+    selectedMap,
+    seriesResult,
+    tournamentStats.cycleId,
+    tournamentStats.losses,
+    tournamentStats.points,
+    tournamentStats.streak,
+    tournamentStats.wins,
+    user?.uid,
+  ]);
 
   const syncReplayUi = useCallback((frameIdx: number) => {
     const frames = replayFramesRef.current;
@@ -623,6 +950,10 @@ export default function App() {
     dummy.y = dummy.dummyAnchorY;
     dummy.vx = 0;
     dummy.vy = 0;
+    dummy.jumpsRemaining = 2;
+    dummy.recoveryUsed = false;
+    dummy.aiDecisionTimer = 0;
+    dummy.aiDesiredAction = 'idle';
     dummy.poisonTimer = 0;
     dummy.slowTimer = 0;
     dummy.stunTimer = 0;
@@ -647,6 +978,25 @@ export default function App() {
     ];
     syncHudImmediate();
   }, [syncHudImmediate]);
+
+  const handleUpdateTrainingDummyConfig = useCallback((next: TrainingDummyConfig) => {
+    setTrainingDummyConfig(next);
+    trainingDummyConfigRef.current = next;
+    const state = engineRef.current;
+    if (state.mode === 'TRAINING' && state.players[1]?.isDummy) {
+      const dummy = state.players[1];
+      if (next.behavior === 'standing_still' && !next.knockbackEnabled) {
+        dummy.x = dummy.dummyAnchorX;
+        dummy.y = dummy.dummyAnchorY;
+        dummy.vx = 0;
+        dummy.vy = 0;
+        dummy.hitstunTimer = 0;
+        dummy.animState = 'idle';
+      }
+      dummy.aiDecisionTimer = 0;
+      dummy.aiDesiredAction = 'idle';
+    }
+  }, []);
 
   const startMatch = useCallback(() => {
     soundSynth.playUiClick();
@@ -813,6 +1163,7 @@ export default function App() {
   );
 
   const togglePause = useCallback(() => {
+    if (activeMatchRef.current) return;
     const engine = engineRef.current;
     if (engine.phase === 'PLAYING') {
       engine.phase = 'PAUSED';
@@ -825,8 +1176,93 @@ export default function App() {
     }
   }, [syncHudImmediate]);
 
+  const openCasualLounge = useCallback(() => {
+    soundSynth.playUiClick();
+    clearSeriesResult();
+    clearError();
+    matchRecordedRef.current = false;
+    replayFramesRef.current = [];
+    replayPlayingRef.current = false;
+    setReplayAvailable(false);
+    const previewMap: MapId =
+      selectedMap === 'random' ? engineRef.current.mapId : selectedMap;
+    engineRef.current = createInitialEngineState(
+      'ONLINE_CASUAL',
+      'ONLINE_CASUAL',
+      previewMap,
+      p1Fighter,
+      p2Fighter
+    );
+    syncHudImmediate();
+  }, [clearError, clearSeriesResult, p1Fighter, p2Fighter, selectedMap, syncHudImmediate]);
+
+  const openRankedArena = useCallback(() => {
+    soundSynth.playUiClick();
+    clearSeriesResult();
+    clearError();
+    matchRecordedRef.current = false;
+    replayFramesRef.current = [];
+    replayPlayingRef.current = false;
+    setReplayAvailable(false);
+    const previewMap: MapId =
+      selectedMap === 'random' ? engineRef.current.mapId : selectedMap;
+    engineRef.current = createInitialEngineState(
+      'ONLINE_RANKED',
+      'ONLINE_RANKED',
+      previewMap,
+      p1Fighter,
+      p2Fighter
+    );
+    syncHudImmediate();
+  }, [clearError, clearSeriesResult, p1Fighter, p2Fighter, selectedMap, syncHudImmediate]);
+
+  const openTournamentArena = useCallback(() => {
+    soundSynth.playUiClick();
+    clearSeriesResult();
+    clearError();
+    matchRecordedRef.current = false;
+    replayFramesRef.current = [];
+    replayPlayingRef.current = false;
+    setReplayAvailable(false);
+    const previewMap: MapId =
+      selectedMap === 'random' ? engineRef.current.mapId : selectedMap;
+    engineRef.current = createInitialEngineState(
+      'ONLINE_TOURNAMENT',
+      'ONLINE_TOURNAMENT',
+      previewMap,
+      p1Fighter,
+      p2Fighter
+    );
+    syncHudImmediate();
+  }, [clearError, clearSeriesResult, p1Fighter, p2Fighter, selectedMap, syncHudImmediate]);
+
+  const returnFromOnlineSeriesToWaitingArea = useCallback(
+    (queueType: OnlineQueueType) => {
+      if (queueType === 'ranked') {
+        openRankedArena();
+      } else if (queueType === 'tournament') {
+        openTournamentArena();
+      } else {
+        openCasualLounge();
+      }
+    },
+    [openCasualLounge, openRankedArena, openTournamentArena]
+  );
+
+  const handleLeaveOnlineMatch = useCallback(() => {
+    soundSynth.playUiClick();
+    const match = activeMatchRef.current;
+    const targetQueue = match?.queueType ?? 'casual';
+    if (match) {
+      leaveMatch(match.matchId);
+    }
+    returnFromOnlineSeriesToWaitingArea(targetQueue);
+  }, [leaveMatch, returnFromOnlineSeriesToWaitingArea]);
+
   const enterArenaSetup = useCallback(() => {
     soundSynth.playUiClick();
+    leaveQueue();
+    clearSeriesResult();
     matchRecordedRef.current = false;
     replayFramesRef.current = [];
     replayPlayingRef.current = false;
@@ -841,10 +1277,12 @@ export default function App() {
       p2Fighter
     );
     syncHudImmediate();
-  }, [p1Fighter, p2Fighter, selectedMap, selectedMode, syncHudImmediate]);
+  }, [clearSeriesResult, leaveQueue, p1Fighter, p2Fighter, selectedMap, selectedMode, syncHudImmediate]);
 
   const returnToHome = useCallback(() => {
     soundSynth.playUiClick();
+    leaveQueue();
+    clearSeriesResult();
     matchRecordedRef.current = false;
     replayFramesRef.current = [];
     replayPlayingRef.current = false;
@@ -859,10 +1297,12 @@ export default function App() {
       p2Fighter
     );
     syncHudImmediate();
-  }, [p1Fighter, p2Fighter, selectedMap, selectedMode, syncHudImmediate]);
+  }, [clearSeriesResult, leaveQueue, p1Fighter, p2Fighter, selectedMap, selectedMode, syncHudImmediate]);
 
   const returnToTitle = useCallback(() => {
     soundSynth.playUiClick();
+    leaveQueue();
+    clearSeriesResult();
     matchRecordedRef.current = false;
     replayFramesRef.current = [];
     replayPlayingRef.current = false;
@@ -877,20 +1317,64 @@ export default function App() {
       p2Fighter
     );
     syncHudImmediate();
-  }, [p1Fighter, p2Fighter, selectedMap, selectedMode, syncHudImmediate]);
+  }, [clearSeriesResult, leaveQueue, p1Fighter, p2Fighter, selectedMap, selectedMode, syncHudImmediate]);
 
   const toggleMute = useCallback(() => {
     setMuted((prev) => {
       const next = !prev;
       soundSynth.setMuted(next);
-      if (!next) soundSynth.playUiClick();
+      stageMusic.setMuted(next);
+      if (!next) {
+        soundSynth.playUiClick();
+        stageMusic.unlock();
+      }
       return next;
     });
   }, []);
 
   useEffect(() => {
+    soundSynth.setVolume(sfxVolume);
+    soundSynth.setMuted(muted);
+    stageMusic.setVolume(musicVolume);
+    stageMusic.setMuted(muted);
+    saveAudioPreferences({ musicVolume, sfxVolume, muted });
+  }, [musicVolume, sfxVolume, muted]);
+
+  useEffect(() => {
+    const unlockAudio = () => {
+      soundSynth.resumeContext();
+      stageMusic.unlock();
+    };
+    window.addEventListener('pointerdown', unlockAudio, { passive: true });
+    window.addEventListener('keydown', unlockAudio, { passive: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+      stageMusic.stop();
+    };
+  }, []);
+
+  useEffect(() => {
+    const shouldPlayStageTrack =
+      hud.phase === 'PLAYING' || hud.phase === 'PAUSED' || hud.phase === 'REPLAY';
+    if (shouldPlayStageTrack) {
+      stageMusic.playStage(hud.mapId);
+    } else {
+      stageMusic.stop();
+    }
+    if (hud.phase === 'PAUSED') {
+      setAudioSettingsOpen(false);
+    }
+  }, [hud.phase, hud.mapId]);
+
+  useEffect(() => {
     const engine = engineRef.current;
-    if (engine.phase === 'HOME' || engine.phase === 'TITLE_MENU') {
+    if (
+      engine.phase === 'HOME' ||
+      engine.phase === 'TITLE_MENU' ||
+      engine.phase === 'ONLINE_CASUAL' ||
+      engine.phase === 'ONLINE_RANKED'
+    ) {
       const previewMap: MapId =
         selectedMap === 'random' ? engine.mapId : selectedMap;
       engine.mode = selectedMode;
@@ -917,6 +1401,27 @@ export default function App() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const code = e.code;
+      if (code === 'Escape') {
+        if (audioSettingsOpenRef.current) {
+          setAudioSettingsOpen(false);
+          return;
+        }
+        if (modalOpenRef.current) {
+          return;
+        }
+        const phase = engineRef.current.phase;
+        if (activeMatchRef.current) {
+          return;
+        }
+        if (phase === 'PLAYING' || phase === 'PAUSED') {
+          togglePause();
+        } else if (phase === 'REPLAY') {
+          exitReplay();
+        }
+        return;
+      }
+
       const target = e.target as HTMLElement | null;
       const isFormControl =
         target !== null &&
@@ -929,7 +1434,6 @@ export default function App() {
         return;
       }
 
-      const code = e.code;
       if (
         code === 'Space' ||
         code === 'ArrowUp' ||
@@ -938,16 +1442,6 @@ export default function App() {
         code === 'ArrowRight'
       ) {
         e.preventDefault();
-      }
-
-      if (code === 'Escape') {
-        const phase = engineRef.current.phase;
-        if (phase === 'PLAYING' || phase === 'PAUSED') {
-          togglePause();
-        } else if (phase === 'REPLAY') {
-          exitReplay();
-        }
-        return;
       }
 
       if (code === 'KeyM') {
@@ -977,7 +1471,7 @@ export default function App() {
         return;
       }
 
-      if (engineRef.current.phase === 'GAME_OVER' && code === 'Enter') {
+      if (engineRef.current.phase === 'GAME_OVER' && code === 'Enter' && !seriesResultRef.current) {
         rematchMatch();
         return;
       }
@@ -1945,7 +2439,10 @@ export default function App() {
       const missingRatio = 1 - defender.hp / defender.maxHp;
       const knockbackScale = ((0.85 + missingRatio * 0.95) / defSpec.weight) * (hasShield ? 0.15 : 1);
 
-      if (!defender.isDummy) {
+      const dummyKnockback =
+        !defender.isDummy ||
+        (engineRef.current.mode === 'TRAINING' && trainingDummyConfigRef.current.knockbackEnabled);
+      if (dummyKnockback) {
         defender.vx = dir * kbX * knockbackScale;
         defender.vy = kbY * knockbackScale;
       } else {
@@ -1953,7 +2450,7 @@ export default function App() {
         defender.vy = 0;
       }
       if (!hasShield) {
-        if (!defender.isDummy) {
+        if (dummyKnockback) {
           defender.grounded = false;
         }
         defender.recoveryUsed = false; // Taking a hit refreshes recovery like Smash!
@@ -2953,6 +3450,7 @@ export default function App() {
           if (
             engineRef.current.mode === 'TRAINING' &&
             opponent.isDummy &&
+            trainingDummyConfigRef.current.autoResetHp &&
             (opponent.hp < opponent.maxHp ||
               opponent.poisonTimer > 0 ||
               opponent.stunTimer > 0 ||
@@ -3038,35 +3536,157 @@ export default function App() {
       }
 
       if (f.isDummy) {
+        const cfg = trainingDummyConfigRef.current;
+        const anchoredStatic = cfg.behavior === 'standing_still' && !cfg.knockbackEnabled;
+
+        if (f.grounded) {
+          f.coyoteTimer = COYOTE_TIME;
+          f.jumpsRemaining = 2;
+          f.recoveryUsed = false;
+        } else if (f.coyoteTimer > 0) {
+          f.coyoteTimer = Math.max(0, f.coyoteTimer - dt);
+        }
+
         if (f.hitstunTimer > 0) {
           f.hitstunTimer = Math.max(0, f.hitstunTimer - dt);
           if (f.stunTimer > 0) f.stunTimer = Math.max(0, f.stunTimer - dt);
           f.animTimer += dt;
+          if (!anchoredStatic) {
+            const drag = f.grounded ? GROUND_FRICTION : AIR_DRAG;
+            if (f.vx > 0) f.vx = Math.max(0, f.vx - drag * dt);
+            else if (f.vx < 0) f.vx = Math.min(0, f.vx + drag * dt);
+          }
           if (f.hitstunTimer === 0) {
-            f.animState = f.stunTimer > 0 ? 'stunned' : 'idle';
+            f.animState = f.stunTimer > 0 ? 'stunned' : f.grounded ? 'idle' : 'fall';
           }
         } else if (f.stunTimer > 0) {
           f.stunTimer = Math.max(0, f.stunTimer - dt);
           f.animState = 'stunned';
           f.animTimer += dt;
-          if (f.stunTimer === 0) {
-            f.animState = 'idle';
+          if (!anchoredStatic) {
+            const drag = f.grounded ? GROUND_FRICTION * 0.7 : AIR_DRAG;
+            if (f.vx > 0) f.vx = Math.max(0, f.vx - drag * dt);
+            else if (f.vx < 0) f.vx = Math.min(0, f.vx + drag * dt);
           }
-        } else {
+          if (f.stunTimer === 0) {
+            f.animState = f.grounded ? 'idle' : 'fall';
+          }
+        } else if (f.animState === 'recovery') {
+          f.animTimer += dt;
+          const steerDir = WORLD_WIDTH * 0.5 >= f.x ? 1 : -1;
+          f.vx += steerDir * 680 * dt;
+          f.vx = Math.max(-320, Math.min(320, f.vx));
+          if (f.animTimer >= f.animDuration) {
+            f.animState = f.grounded ? 'idle' : 'fall';
+            f.animTimer = 0;
+            f.animDuration = 0;
+          }
+        } else if (anchoredStatic) {
+          f.vx = 0;
+          f.x = f.dummyAnchorX;
           f.animState = 'idle';
           f.animTimer += dt;
+        } else {
+          const ctrl = computeTrainingDummyControls(f, opponent, plats, cfg, dt);
+          const speedMult =
+            (f.slowTimer > 0 ? 0.58 : 1) * cfg.moveSpeedScale;
+          const targetVx = ctrl.moveDir * DUMMY_BASE_MOVE_SPEED * speedMult;
+
+          if (ctrl.moveDir !== 0) {
+            f.facing = ctrl.moveDir;
+            const accel = f.grounded ? 2500 : 1650;
+            if (f.vx < targetVx) f.vx = Math.min(targetVx, f.vx + accel * dt);
+            else if (f.vx > targetVx) f.vx = Math.max(targetVx, f.vx - accel * dt);
+          } else {
+            f.facing = opponent.x >= f.x ? 1 : -1;
+            const drag = f.grounded ? GROUND_FRICTION : AIR_DRAG;
+            if (f.vx > 0) f.vx = Math.max(0, f.vx - drag * dt);
+            else if (f.vx < 0) f.vx = Math.min(0, f.vx + drag * dt);
+          }
+
+          if (ctrl.wantDrop && f.grounded) {
+            f.dropThroughTimer = 0.18;
+            f.grounded = false;
+          }
+
+          if (ctrl.wantJump && (f.coyoteTimer > 0 || f.jumpsRemaining > 0)) {
+            const isDouble = f.coyoteTimer <= 0;
+            f.vy = -DUMMY_JUMP_VELOCITY * (isDouble ? 0.92 : 1);
+            f.grounded = false;
+            f.coyoteTimer = 0;
+            f.jumpsRemaining = Math.max(0, isDouble ? f.jumpsRemaining - 1 : 1);
+            f.squashX = 0.82;
+            f.squashY = 1.22;
+            soundSynth.playJump(isDouble);
+            for (let i = 0; i < 4; i++) {
+              spawnParticle(
+                f.x + (Math.random() - 0.5) * 28,
+                f.y,
+                (Math.random() - 0.5) * 80,
+                20 + Math.random() * 35,
+                4,
+                '#A7F3D0',
+                0.24,
+                80
+              );
+            }
+          }
+
+          if (ctrl.wantRecovery && !f.recoveryUsed) {
+            f.recoveryUsed = true;
+            f.grounded = false;
+            const recDir: 1 | -1 = WORLD_WIDTH * 0.5 >= f.x ? 1 : -1;
+            f.facing = recDir;
+            f.vx = recDir * 240;
+            f.vy = DUMMY_RECOVERY_VY;
+            f.animState = 'recovery';
+            f.animTimer = 0;
+            f.animDuration = 0.36;
+            f.squashX = 0.84;
+            f.squashY = 1.2;
+            soundSynth.playRecovery();
+            spawnParticle(f.x, f.y - 20, 0, 0, 34, '#34D399', 0.28, 0, 'ring');
+            for (let i = 0; i < 8; i++) {
+              spawnParticle(
+                f.x + (Math.random() - 0.5) * 24,
+                f.y,
+                (Math.random() - 0.5) * 140,
+                90 + Math.random() * 110,
+                5,
+                i % 2 === 0 ? '#34D399' : '#FEF08A',
+                0.3,
+                160,
+                'spark'
+              );
+            }
+          } else {
+            if (!f.grounded) {
+              f.animState = f.vy < 0 ? 'jump' : 'fall';
+            } else if (Math.abs(ctrl.moveDir) > 0 || Math.abs(f.vx) > 35) {
+              f.animState = 'run';
+            } else {
+              f.animState = 'idle';
+            }
+            f.animTimer += dt;
+          }
         }
 
-        f.vx = 0;
-        f.x = f.dummyAnchorX;
+        if (anchoredStatic) {
+          f.vx = 0;
+          f.x = f.dummyAnchorX;
+        }
+
         const gravScale = MAP_SPECS[engineRef.current.mapId].gravityScale ?? 1;
         f.vy = Math.min(MAX_FALL_SPEED * gravScale, f.vy + GRAVITY * gravScale * dt);
         const prevDummyY = f.y;
+        f.x += f.vx * dt;
         f.y += f.vy * dt;
+
         let dummyLanded = false;
         if (f.vy >= 0) {
           for (const plat of plats) {
             if (plat.broken) continue;
+            if (plat.passThrough && f.dropThroughTimer > 0) continue;
             const withinX =
               f.x + f.width * 0.28 >= plat.x && f.x - f.width * 0.28 <= plat.x + plat.width;
             const crossedTop = prevDummyY <= plat.y + 10 && f.y >= plat.y;
@@ -3074,18 +3694,46 @@ export default function App() {
               f.y = plat.y;
               f.vy = 0;
               f.grounded = true;
+              f.recoveryUsed = false;
               dummyLanded = true;
               break;
             }
           }
         }
         if (!dummyLanded) f.grounded = false;
-        if (f.y > BLAST_ZONE.bottom || f.hp <= 0) {
+
+        const dummyOutOfBounds =
+          f.x < BLAST_ZONE.left ||
+          f.x > BLAST_ZONE.right ||
+          f.y < BLAST_ZONE.top ||
+          f.y > BLAST_ZONE.bottom;
+
+        if (dummyOutOfBounds || f.hp <= 0) {
           f.hp = f.maxHp;
           f.x = f.dummyAnchorX;
           f.y = f.dummyAnchorY;
           f.vx = 0;
           f.vy = 0;
+          f.jumpsRemaining = 2;
+          f.recoveryUsed = false;
+          f.hitstunTimer = 0;
+          f.stunTimer = 0;
+          f.poisonTimer = 0;
+          f.slowTimer = 0;
+          f.confuseTimer = 0;
+          f.animState = 'idle';
+          engineRef.current.floatingNumbers.push({
+            id: engineRef.current.nextEntityId++,
+            x: f.x,
+            y: f.y - f.height - 16,
+            vx: 0,
+            vy: -55,
+            text: dummyOutOfBounds ? 'RECOVERED' : 'HP FULL',
+            color: '#34D399',
+            scale: 0.95,
+            life: 0.85,
+            maxLife: 0.85,
+          });
         }
         return;
       }
@@ -3900,13 +4548,17 @@ export default function App() {
             }
           );
           if (hit) {
-            if (p.pullOnHit && !target.isDummy) {
+            const allowDummyMotion =
+              !target.isDummy ||
+              (engineRef.current.mode === 'TRAINING' &&
+                trainingDummyConfigRef.current.knockbackEnabled);
+            if (p.pullOnHit && allowDummyMotion) {
               const pullDir: 1 | -1 = attacker.x >= target.x ? 1 : -1;
               target.vx = pullDir * 520;
               target.vy = -210;
               spawnParticle(target.x, targetCy, 0, 0, 30, '#38BDF8', 0.22, 0, 'ring');
             }
-            if (p.floatTrap && !target.isDummy) {
+            if (p.floatTrap && allowDummyMotion) {
               target.vx *= 0.25;
               target.vy = -490;
               spawnParticle(target.x, targetCy, 0, 0, 38, '#06B6D4', 0.3, 0, 'ring');
@@ -4420,8 +5072,67 @@ export default function App() {
       const state = engineRef.current;
       state.ambientTime += dt;
 
-      if (state.phase === 'HOME' || state.phase === 'TITLE_MENU') {
+      if (
+        state.phase === 'HOME' ||
+        state.phase === 'TITLE_MENU' ||
+        state.phase === 'ONLINE_CASUAL' ||
+        state.phase === 'ONLINE_RANKED' ||
+        state.phase === 'ONLINE_TOURNAMENT'
+      ) {
         stepAttractDemo(dt);
+      } else if (state.phase === 'PLAYING' && activeMatchRef.current) {
+        const match = activeMatchRef.current;
+        const held = heldKeysRef.current;
+        const just = justPressedRef.current;
+
+        let moveDir = 0;
+        if (held.has('KeyA') || held.has('ArrowLeft')) moveDir -= 1;
+        if (held.has('KeyD') || held.has('ArrowRight')) moveDir += 1;
+        moveDir = Math.max(-1, Math.min(1, moveDir));
+
+        const jumpHeld = held.has('KeyW') || held.has('ArrowUp');
+        const downHeld = held.has('KeyS') || held.has('ArrowDown');
+        const actions: OnlineInputActions = {};
+
+        if (just.has('KeyW') || just.has('ArrowUp')) actions.jump = true;
+        if (just.has('KeyR') || (jumpHeld && just.has('KeyK'))) {
+          actions.recovery = true;
+        } else if (just.has('KeyU')) {
+          actions.attack1 = true;
+        } else if (just.has('KeyI')) {
+          actions.attack2 = true;
+        } else if (just.has('KeyO')) {
+          actions.attack3 = true;
+        } else if (just.has('KeyK')) {
+          actions.special = true;
+        } else if (just.has('KeyL')) {
+          actions.ultimate = true;
+        } else if (just.has('KeyT')) {
+          actions.taunt = true;
+        } else if (just.has('KeyJ') || just.has('Space')) {
+          actions.attackCombo = true;
+        }
+
+        const hasAction = Object.keys(actions).length > 0;
+        const prevSent = lastOnlineInputSentRef.current;
+        const heldChanged =
+          prevSent.moveDir !== moveDir ||
+          prevSent.jumpHeld !== jumpHeld ||
+          prevSent.downHeld !== downHeld;
+        const heartbeatDue = now - prevSent.atMs > 65;
+
+        if (match.roundPhase === 'fighting' && (hasAction || heldChanged || heartbeatDue)) {
+          lastOnlineInputSentRef.current = {
+            moveDir,
+            jumpHeld,
+            downHeld,
+            atMs: now,
+          };
+          sendMatchInputRef.current(match.matchId, moveDir, jumpHeld, downHeld, actions);
+        }
+
+        justPressedRef.current.clear();
+        stepVisualEffects(dt * 0.45);
       } else if (state.phase === 'PLAYING') {
         state.matchTime += dt;
 
@@ -4545,6 +5256,56 @@ export default function App() {
 
       {/* Top-Right Utility Controls */}
       <div className="absolute top-4 right-4 z-30 flex items-center gap-2">
+        {hud.phase !== 'PAUSED' && (
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => {
+                soundSynth.playUiClick();
+                setAudioSettingsOpen((prev) => !prev);
+              }}
+              aria-label="Audio settings"
+              aria-expanded={audioSettingsOpen}
+              className={`h-10 px-3 flex items-center gap-1.5 rounded-lg border text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                audioSettingsOpen
+                  ? 'bg-slate-800 border-amber-400/50 text-amber-300'
+                  : 'bg-slate-950/80 border-white/15 text-slate-200 hover:bg-slate-900 hover:text-white'
+              }`}
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
+              <span className="hidden sm:inline">Settings</span>
+            </button>
+
+            {audioSettingsOpen && (
+              <div className="absolute right-0 top-12 w-72 sm:w-80 bg-slate-900 border border-white/15 rounded-xl p-3.5 shadow-2xl z-40">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-bold text-white">Sound &amp; Music</span>
+                  <button
+                    type="button"
+                    onClick={() => setAudioSettingsOpen(false)}
+                    aria-label="Close audio settings"
+                    className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                </div>
+                <AudioSettingsControls
+                  musicVolume={musicVolume}
+                  sfxVolume={sfxVolume}
+                  muted={muted}
+                  activeStageId={
+                    hud.phase === 'PLAYING' || hud.phase === 'REPLAY' ? hud.mapId : null
+                  }
+                  onChangeMusicVolume={setMusicVolume}
+                  onChangeSfxVolume={setSfxVolume}
+                  onPreviewSfx={() => soundSynth.playUiClick()}
+                  onToggleMute={toggleMute}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
         <button
           type="button"
           onClick={toggleMute}
@@ -4554,7 +5315,19 @@ export default function App() {
           {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
         </button>
 
-        {(hud.phase === 'PLAYING' || hud.phase === 'PAUSED') && (
+        {hud.phase === 'PLAYING' && activeMatch && (
+          <button
+            type="button"
+            onClick={handleLeaveOnlineMatch}
+            aria-label="Leave online match"
+            className="h-10 px-3 flex items-center gap-1.5 rounded-lg bg-slate-950/85 border border-rose-400/35 text-rose-200 hover:bg-rose-950/80 hover:text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Leave Match</span>
+          </button>
+        )}
+
+        {(hud.phase === 'PLAYING' || hud.phase === 'PAUSED') && !activeMatch && (
           <button
             type="button"
             onClick={togglePause}
@@ -4581,8 +5354,26 @@ export default function App() {
       {/* Unobstructed Active Match & Replay Perimeter HUD */}
       {(hud.phase === 'PLAYING' || hud.phase === 'PAUSED' || hud.phase === 'REPLAY') && (
         <div className="pointer-events-none absolute inset-0 z-20 flex flex-col justify-between p-4 sm:p-6">
-          <div className="flex items-start justify-between gap-4 pr-28 sm:pr-36">
-            <FighterHudCard player={p1} spec={p1Spec} align="left" />
+          <div className="flex items-start justify-between gap-4 pr-28 sm:pr-40">
+            <FighterHudCard
+              player={p1}
+              spec={p1Spec}
+              align="left"
+              maxStocks={activeMatch ? ONLINE_ROUND_STOCKS : STARTING_STOCKS}
+              tagOverride={
+                activeMatch
+                  ? activeMatch.yourSlot === 0
+                    ? 'YOU'
+                    : 'OPP'
+                  : undefined
+              }
+              nameOverride={activeMatch ? activeMatch.players[0].displayName : undefined}
+              sublabelOverride={
+                activeMatch && activeMatch.queueType === 'ranked'
+                  ? `${getRankTier(activeMatch.players[0].rankedPoints).name} · ${activeMatch.players[0].rankedPoints} RP`
+                  : undefined
+              }
+            />
 
             <div className="hidden md:flex flex-col items-center pt-1">
               {hud.phase === 'REPLAY' ? (
@@ -4594,6 +5385,61 @@ export default function App() {
                     {replayHud.elapsed.toFixed(1)}s / {replayHud.duration.toFixed(1)}s
                   </span>
                 </>
+              ) : activeMatch ? (
+                <div
+                  className={`bg-slate-950/88 border rounded-xl px-4 py-2 text-center shadow-lg ${
+                    activeMatch.queueType === 'ranked' || activeMatch.queueType === 'tournament'
+                      ? 'border-amber-400/35'
+                      : 'border-sky-400/35'
+                  }`}
+                >
+                  <div
+                    className={`text-[10px] font-bold tracking-wider uppercase ${
+                      activeMatch.queueType === 'ranked' || activeMatch.queueType === 'tournament'
+                        ? 'text-amber-300'
+                        : 'text-sky-300'
+                    }`}
+                  >
+                    {activeMatch.queueType === 'ranked'
+                      ? 'Online Ranked'
+                      : activeMatch.queueType === 'tournament'
+                      ? activeMatch.tournamentTitle || 'Bi-Weekly Tournament'
+                      : 'Online Casual'}{' '}
+                    · First to {activeMatch.targetWins}
+                  </div>
+                  <div className="mt-1 flex items-center justify-center gap-3 font-mono-num">
+                    <div className="flex items-center gap-1" aria-label={`Player 1 series wins ${activeMatch.scores[0]}`}>
+                      {Array.from({ length: activeMatch.targetWins }).map((_, idx) => (
+                        <span
+                          key={idx}
+                          className={`w-2.5 h-2.5 rounded-sm border ${
+                            idx < activeMatch.scores[0]
+                              ? 'bg-amber-400 border-amber-200'
+                              : 'bg-slate-800 border-white/20'
+                          }`}
+                        />
+                      ))}
+                    </div>
+                    <span className="text-lg font-extrabold text-white">
+                      {activeMatch.scores[0]} – {activeMatch.scores[1]}
+                    </span>
+                    <div className="flex items-center gap-1" aria-label={`Player 2 series wins ${activeMatch.scores[1]}`}>
+                      {Array.from({ length: activeMatch.targetWins }).map((_, idx) => (
+                        <span
+                          key={idx}
+                          className={`w-2.5 h-2.5 rounded-sm border ${
+                            idx < activeMatch.scores[1]
+                              ? 'bg-sky-400 border-sky-200'
+                              : 'bg-slate-800 border-white/20'
+                          }`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <div className="mt-0.5 text-[11px] font-mono-num text-slate-300">
+                    Round {activeMatch.round} · {MAP_SPECS[hud.mapId].name}
+                  </div>
+                </div>
               ) : hud.mode === 'TRAINING' ? (
                 <div className="bg-slate-950/85 border border-emerald-400/25 rounded-xl px-4 py-2 text-center shadow-lg">
                   <div className="text-[10px] font-semibold tracking-wider text-emerald-400 uppercase">
@@ -4639,8 +5485,86 @@ export default function App() {
               )}
             </div>
 
-            <FighterHudCard player={p2} spec={p2Spec} align="right" />
+            <FighterHudCard
+              player={p2}
+              spec={p2Spec}
+              align="right"
+              maxStocks={activeMatch ? ONLINE_ROUND_STOCKS : STARTING_STOCKS}
+              tagOverride={
+                activeMatch
+                  ? activeMatch.yourSlot === 1
+                    ? 'YOU'
+                    : 'OPP'
+                  : undefined
+              }
+              nameOverride={activeMatch ? activeMatch.players[1].displayName : undefined}
+              sublabelOverride={
+                activeMatch && activeMatch.queueType === 'ranked'
+                  ? `${getRankTier(activeMatch.players[1].rankedPoints).name} · ${activeMatch.players[1].rankedPoints} RP`
+                  : undefined
+              }
+            />
           </div>
+
+          {hud.phase === 'PLAYING' && hud.mode === 'TRAINING' && (
+            <div className="mt-2 mb-auto flex justify-end">
+              <TrainingConfigPanel
+                config={trainingDummyConfig}
+                onChangeConfig={handleUpdateTrainingDummyConfig}
+                onResetDummy={resetTrainingSession}
+                onRefillUlt={refillTrainingUlt}
+                onUiClick={() => soundSynth.playUiClick()}
+              />
+            </div>
+          )}
+
+          {/* Online FT3 Round Intro / Round Over Intermission Banner */}
+          {hud.phase === 'PLAYING' &&
+            activeMatch &&
+            (activeMatch.roundPhase === 'intro' || activeMatch.roundPhase === 'round_over') && (
+              <div className="mx-auto my-auto px-7 py-4 rounded-xl bg-slate-950/90 border border-white/20 text-center shadow-2xl">
+                {activeMatch.roundPhase === 'intro' ? (
+                  <>
+                    <div
+                      className={`text-xs font-bold tracking-widest uppercase ${
+                        activeMatch.queueType === 'ranked' || activeMatch.queueType === 'tournament'
+                          ? 'text-amber-400'
+                          : 'text-sky-400'
+                      }`}
+                    >
+                      {activeMatch.queueType === 'ranked'
+                        ? 'Ranked FT3'
+                        : activeMatch.queueType === 'tournament'
+                        ? 'Tournament FT3'
+                        : 'Casual FT3'}{' '}
+                      · First to {TARGET_SERIES_WINS}
+                    </div>
+                    <div className="font-display text-3xl sm:text-4xl font-extrabold text-white mt-1">
+                      Round {activeMatch.round}
+                    </div>
+                    <div className="text-xs text-slate-300 mt-1 font-mono-num">
+                      {activeMatch.players[0].displayName} ({activeMatch.scores[0]}) vs{' '}
+                      {activeMatch.players[1].displayName} ({activeMatch.scores[1]})
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-xs font-bold tracking-widest uppercase text-amber-400">
+                      Round {activeMatch.round} Complete
+                    </div>
+                    <div className="font-display text-2xl sm:text-3xl font-extrabold text-white mt-1">
+                      {activeMatch.lastRoundWinnerSlot !== null
+                        ? `${activeMatch.players[activeMatch.lastRoundWinnerSlot].displayName} Wins the Round`
+                        : 'Round Over'}
+                    </div>
+                    <div className="text-sm text-slate-200 mt-1 font-mono-num">
+                      Series Score: {activeMatch.scores[0]} – {activeMatch.scores[1]} (First to{' '}
+                      {activeMatch.targetWins})
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
 
           {hud.phase === 'REPLAY' ? (
             <div className="pointer-events-auto mx-auto w-full max-w-3xl bg-slate-950/88 border border-white/15 rounded-xl px-4 py-3 shadow-2xl">
@@ -4775,7 +5699,9 @@ export default function App() {
           ) : (
             <div className="flex justify-center">
               <p className="text-[11px] text-slate-200/75 font-medium tracking-wide bg-slate-950/55 px-3 py-1 rounded-md border border-white/10 whitespace-nowrap">
-                {hud.mode === '1P_AI'
+                {activeMatch
+                  ? 'Online Controls: WASD / Arrows Move & Jump · J / Space Attack · K Special · R (W+K) Recovery · L Ultimate · T Taunt'
+                  : hud.mode === '1P_AI'
                   ? 'A/D Move · W Jump · S Drop · J Attack · K Special · R (W+K) Recovery · L Ultimate · T Taunt · Esc Pause'
                   : 'P1: WASD + J/K/R/L/T · P2: Arrows + , / . / \\ / / / ; · Esc Pause'}
               </p>
@@ -4785,9 +5711,13 @@ export default function App() {
       )}
 
       {/* Token Wars Dark Home Screen with Sign Up & Login */}
-      {hud.phase === 'HOME' && (
+      {hud.phase === 'HOME' && !activeMatch && (
         <HomeScreen
           scoreboard={scoreboard}
+          onlineStats={onlineStats}
+          tournamentStats={tournamentStats}
+          waitingSnapshot={waitingSnapshot}
+          tournamentSnapshot={tournamentSnapshot}
           selectedMode={selectedMode}
           selectedMap={selectedMap}
           p1Fighter={p1Fighter}
@@ -4795,11 +5725,113 @@ export default function App() {
           onEnterArenaSetup={enterArenaSetup}
           onQuickBattle={startMatch}
           onStartTraining={startTraining}
+          onOpenCasualLounge={openCasualLounge}
+          onOpenRankedArena={openRankedArena}
+          onOpenTournamentArena={openTournamentArena}
           onOpenProfileModal={() => setProfileModalOpen(true)}
           onOpenUpgradeModal={() => {
             setAuthModalMode('upgrade');
             setAuthModalOpen(true);
           }}
+          onUiClick={() => soundSynth.playUiClick()}
+        />
+      )}
+
+      {/* Separate Online Casuals Waiting Lounge Screen */}
+      {hud.phase === 'ONLINE_CASUAL' && !activeMatch && !seriesResult && (
+        <OnlineCasualScreen
+          connected={wsConnected}
+          clientId={wsClientId}
+          playerName={onlinePlayerName}
+          selectedFighter={p1Fighter}
+          selectedMap={selectedMap}
+          onlineStats={onlineStats}
+          waitingSnapshot={waitingSnapshot}
+          inQueue={inQueue}
+          queuePosition={queuePosition}
+          queueEnteredAt={queueEnteredAt}
+          errorMessage={wsErrorMessage}
+          onSelectFighter={setP1Fighter}
+          onSelectMap={setSelectedMap}
+          onJoinCasualQueue={() =>
+            joinQueue('casual', {
+              accountUid: user?.uid,
+              displayName: onlinePlayerName,
+              fighterId: p1Fighter,
+              preferredMap: selectedMap,
+              rankedPoints: onlineStats.rankedPoints,
+            })
+          }
+          onLeaveQueue={leaveQueue}
+          onSwitchToRanked={openRankedArena}
+          onBackHome={returnToHome}
+          onUiClick={() => soundSynth.playUiClick()}
+        />
+      )}
+
+      {/* Separate Online Ranked Waiting Arena Screen */}
+      {hud.phase === 'ONLINE_RANKED' && !activeMatch && !seriesResult && (
+        <OnlineRankedScreen
+          connected={wsConnected}
+          clientId={wsClientId}
+          playerName={onlinePlayerName}
+          selectedFighter={p1Fighter}
+          onlineStats={onlineStats}
+          waitingSnapshot={waitingSnapshot}
+          inQueue={inQueue}
+          queuePosition={queuePosition}
+          queueEnteredAt={queueEnteredAt}
+          errorMessage={wsErrorMessage}
+          onSelectFighter={setP1Fighter}
+          onJoinRankedQueue={() =>
+            joinQueue('ranked', {
+              accountUid: user?.uid,
+              displayName: onlinePlayerName,
+              fighterId: p1Fighter,
+              preferredMap: 'random',
+              rankedPoints: onlineStats.rankedPoints,
+            })
+          }
+          onLeaveQueue={leaveQueue}
+          onSwitchToCasual={openCasualLounge}
+          onBackHome={returnToHome}
+          onUiClick={() => soundSynth.playUiClick()}
+        />
+      )}
+
+      {/* Bi-Weekly 7-Day Tournament Arena Screen */}
+      {hud.phase === 'ONLINE_TOURNAMENT' && !activeMatch && !seriesResult && (
+        <OnlineTournamentScreen
+          connected={wsConnected}
+          clientId={wsClientId}
+          playerName={onlinePlayerName}
+          selectedFighter={p1Fighter}
+          tournamentStats={tournamentStats}
+          waitingSnapshot={waitingSnapshot}
+          tournamentSnapshot={tournamentSnapshot}
+          inQueue={inQueue}
+          queuePosition={queuePosition}
+          queueEnteredAt={queueEnteredAt}
+          errorMessage={wsErrorMessage}
+          onSelectFighter={setP1Fighter}
+          onJoinTournamentQueue={() =>
+            joinQueue('tournament', {
+              accountUid: user?.uid,
+              displayName: onlinePlayerName,
+              fighterId: p1Fighter,
+              preferredMap: 'random',
+              rankedPoints: onlineStats.rankedPoints,
+              tournamentPoints: tournamentStats.points,
+              tournamentWins: tournamentStats.wins,
+              tournamentLosses: tournamentStats.losses,
+              tournamentStreak: tournamentStats.streak,
+              tournamentCycleId: tournamentStats.cycleId,
+            })
+          }
+          onLeaveQueue={leaveQueue}
+          onSwitchToCasual={openCasualLounge}
+          onSwitchToRanked={openRankedArena}
+          onBackHome={returnToHome}
           onUiClick={() => soundSynth.playUiClick()}
         />
       )}
@@ -5010,15 +6042,15 @@ export default function App() {
                   <div className="flex-1 bg-slate-900/90 border border-emerald-400/25 rounded-lg p-4 flex flex-col justify-between text-left">
                     <div>
                       <div className="text-sm font-bold text-emerald-300">
-                        Static Training Dummy
+                        Configurable Training Dummy
                       </div>
                       <p className="text-xs text-slate-300 mt-1.5 leading-relaxed">
-                        Anchored wooden target dummy for practicing ground, aerial, special, and ultimate combos without knockback chasing.
+                        Practice ground, aerial, special, and ultimate combos against Standing Still, Auto-Recover, or Random Jump / Movement targets.
                       </p>
                       <ul className="mt-3 space-y-1.5 text-xs text-slate-300 border-t border-white/10 pt-3">
                         <li>· Live hit-combo counter &amp; floating damage numbers</li>
-                        <li>· 999 HP with automatic reset between combos</li>
-                        <li>· Instant Ult refill (F) &amp; session reset (Backspace)</li>
+                        <li>· Switch between Static, Auto-Recover &amp; Random Roam</li>
+                        <li>· Toggle knockback physics, HP auto-reset &amp; movement pace</li>
                       </ul>
                     </div>
                     <div className="mt-4 pt-3 border-t border-white/10 text-[11px] text-slate-400">
@@ -5072,10 +6104,10 @@ export default function App() {
         </div>
       )}
 
-      {/* Pause Modal */}
+      {/* Pause & Audio Settings Modal */}
       {hud.phase === 'PAUSED' && (
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/75 p-4">
-          <div className="w-full max-w-sm bg-slate-900 border border-white/15 rounded-xl p-6 text-center shadow-2xl">
+          <div className="w-full max-w-md bg-slate-900 border border-white/15 rounded-xl p-6 text-center shadow-2xl">
             <h2 className="font-display text-2xl font-bold text-white">
               {hud.mode === 'TRAINING' ? 'Training Paused' : 'Match Paused'}
             </h2>
@@ -5084,7 +6116,20 @@ export default function App() {
               {MAP_SPECS[hud.mapId].name}
             </p>
 
-            <div className="mt-6 flex flex-col gap-2.5">
+            <div className="mt-4">
+              <AudioSettingsControls
+                musicVolume={musicVolume}
+                sfxVolume={sfxVolume}
+                muted={muted}
+                activeStageId={hud.mapId}
+                onChangeMusicVolume={setMusicVolume}
+                onChangeSfxVolume={setSfxVolume}
+                onPreviewSfx={() => soundSynth.playUiClick()}
+                onToggleMute={toggleMute}
+              />
+            </div>
+
+            <div className="mt-4 flex flex-col gap-2.5">
               <button
                 type="button"
                 onClick={togglePause}
@@ -5124,11 +6169,17 @@ export default function App() {
           winner={winner}
           runnerUp={winner.slot === 0 ? p2 : p1}
           mapName={MAP_SPECS[hud.mapId].name}
-          matchTime={hud.matchTime}
+          matchTime={seriesResult ? seriesResult.matchDurationSec : hud.matchTime}
           replayAvailable={replayAvailable}
           replayDurationSec={replayDurationSec}
+          onlineResult={seriesResult}
           onWatchReplay={startReplay}
           onRematch={rematchMatch}
+          onReturnToWaitingArea={
+            seriesResult
+              ? () => returnFromOnlineSeriesToWaitingArea(seriesResult.queueType)
+              : undefined
+          }
           onReturnToTitle={returnToTitle}
           onReturnToHome={returnToHome}
         />
@@ -5159,14 +6210,25 @@ function FighterHudCard({
   player,
   spec,
   align,
+  maxStocks = STARTING_STOCKS,
+  tagOverride,
+  nameOverride,
+  sublabelOverride,
 }: {
   player: HudSnapshot['players'][number];
   spec: (typeof FIGHTER_SPECS)[FighterId];
   align: 'left' | 'right';
+  maxStocks?: number;
+  tagOverride?: string;
+  nameOverride?: string;
+  sublabelOverride?: string;
 }) {
   const hpPct = Math.max(0, Math.min(100, (player.hp / player.maxHp) * 100));
   const ultReady = player.ultCharge >= 100;
-  const tag = player.isDummy ? 'DUMMY' : player.slot === 0 ? 'P1' : player.isAi ? 'CPU' : 'P2';
+  const tag =
+    tagOverride ??
+    (player.isDummy ? 'DUMMY' : player.slot === 0 ? 'P1' : player.isAi ? 'CPU' : 'P2');
+  const displayName = nameOverride ?? player.name;
   const accentColor = player.isDummy ? '#34D399' : spec.accentColor;
 
   const activeStatuses: string[] = [];
@@ -5194,7 +6256,7 @@ function FighterHudCard({
             {tag}
           </span>
           <span className="font-display font-bold text-sm text-white truncate">
-            {player.name}
+            {displayName}
           </span>
         </div>
 
@@ -5204,7 +6266,7 @@ function FighterHudCard({
           </span>
         ) : (
           <div className="flex items-center gap-1 shrink-0" aria-label={`${player.stocks} hearts remaining`}>
-            {Array.from({ length: STARTING_STOCKS }).map((_, idx) => {
+            {Array.from({ length: maxStocks }).map((_, idx) => {
               const filled = idx < player.stocks;
               return (
                 <svg
@@ -5251,8 +6313,10 @@ function FighterHudCard({
             ULT {ultReady ? 'READY' : `${player.ultCharge}%`}
           </span>
         )}
-        <span className="text-slate-400">
-          {activeStatuses.length > 0 ? activeStatuses.join(' · ') : formatAnimLabel(player.animState)}
+        <span className="text-slate-400 truncate max-w-[100px]">
+          {activeStatuses.length > 0
+            ? activeStatuses.join(' · ')
+            : sublabelOverride ?? formatAnimLabel(player.animState)}
         </span>
       </div>
     </div>
@@ -5347,8 +6411,10 @@ function WinnersPodiumOverlay({
   matchTime,
   replayAvailable,
   replayDurationSec,
+  onlineResult,
   onWatchReplay,
   onRematch,
+  onReturnToWaitingArea,
   onReturnToTitle,
   onReturnToHome,
 }: {
@@ -5358,24 +6424,37 @@ function WinnersPodiumOverlay({
   matchTime: number;
   replayAvailable: boolean;
   replayDurationSec: number;
+  onlineResult?: OnlineSeriesResult | null;
   onWatchReplay: () => void;
   onRematch: () => void;
+  onReturnToWaitingArea?: () => void;
   onReturnToTitle: () => void;
   onReturnToHome: () => void;
 }) {
   const podiumCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const spec = FIGHTER_SPECS[winner.id];
-  const winnerTag = winner.slot === 0 ? 'Player 1' : winner.isAi ? 'CPU' : 'Player 2';
+
   const p1 = winner.slot === 0 ? winner : runnerUp;
   const p2 = winner.slot === 1 ? winner : runnerUp;
-  const p1Tag = 'Player 1';
-  const p2Tag = p2.isAi ? 'CPU' : 'Player 2';
+  const p1Tag = onlineResult ? onlineResult.playerNames[0] : 'Player 1';
+  const p2Tag = onlineResult ? onlineResult.playerNames[1] : p2.isAi ? 'CPU' : 'Player 2';
+  const winnerTag = onlineResult
+    ? onlineResult.winnerSlot === onlineResult.yourSlot
+      ? 'You Win the FT3 Series'
+      : `${onlineResult.playerNames[onlineResult.winnerSlot]} Wins`
+    : `${winner.slot === 0 ? 'Player 1' : winner.isAi ? 'CPU' : 'Player 2'} Wins`;
 
   const analysis = analyzeMatchFeats(p1, p2, winner.slot, matchTime);
   const mvpPlayer = analysis.mvpSlot === 0 ? p1 : p2;
   const mvpSpec = FIGHTER_SPECS[mvpPlayer.id];
   const mvpTag = mvpPlayer.slot === 0 ? p1Tag : p2Tag;
   const mvpStanding = analysis.players[analysis.mvpSlot];
+
+  const yourRpDelta = onlineResult ? onlineResult.rpDelta[onlineResult.yourSlot] : 0;
+  const yourNewRp = onlineResult ? onlineResult.newRp[onlineResult.yourSlot] : 0;
+  const yourNewTier = onlineResult ? getRankTier(yourNewRp) : null;
+  const yourTpDelta = onlineResult ? onlineResult.tpDelta[onlineResult.yourSlot] : 0;
+  const yourNewTp = onlineResult ? onlineResult.newTp[onlineResult.yourSlot] : 0;
 
   useEffect(() => {
     const canvas = podiumCanvasRef.current;
@@ -5421,18 +6500,30 @@ function WinnersPodiumOverlay({
       <div className="w-full max-w-xl max-h-[calc(100dvh-2rem)] overflow-y-auto bg-slate-900/95 border border-white/15 rounded-xl p-5 sm:p-6 shadow-2xl text-center">
         <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-amber-400">
           <Trophy className="w-3.5 h-3.5" aria-hidden="true" />
-          <span>Winner&apos;s Podium</span>
+          <span>
+            {onlineResult
+              ? `${
+                  onlineResult.queueType === 'ranked'
+                    ? 'Ranked'
+                    : onlineResult.queueType === 'tournament'
+                    ? 'Bi-Weekly Tournament'
+                    : 'Casual'
+                } FT3 Series · Score ${onlineResult.scores[0]} – ${onlineResult.scores[1]}${
+                  onlineResult.reason === 'forfeit' ? ' · Forfeit' : ''
+                }`
+              : "Winner's Podium"}
+          </span>
         </div>
 
         <h2
           id="winners-podium-title"
           className="font-display text-3xl font-extrabold text-white mt-1 text-balance"
         >
-          {winnerTag} Wins
+          {winnerTag}
         </h2>
         <p className="text-sm text-slate-300 mt-1">
           <span className="font-semibold" style={{ color: spec.accentColor }}>
-            {winner.name}
+            {FIGHTER_SPECS[winner.id].name}
           </span>
           <span className="mx-1.5 text-slate-500" aria-hidden="true">
             ·
@@ -5445,6 +6536,36 @@ function WinnersPodiumOverlay({
             {formatMatchDuration(analysis.matchDurationSec)}
           </span>
         </p>
+
+        {onlineResult && onlineResult.queueType === 'ranked' && yourNewTier && (
+          <div className="mt-3 pt-3 border-t border-white/10 flex items-center justify-center gap-4 text-xs font-mono-num">
+            <span className="text-slate-300">
+              Ranked Rating:{' '}
+              <strong style={{ color: yourNewTier.color }}>
+                {yourNewTier.name} · {yourNewRp} RP
+              </strong>
+            </span>
+            <span
+              className={`font-bold ${
+                yourRpDelta >= 0 ? 'text-emerald-400' : 'text-rose-400'
+              }`}
+            >
+              {yourRpDelta >= 0 ? `+${yourRpDelta} RP` : `${yourRpDelta} RP`}
+            </span>
+          </div>
+        )}
+
+        {onlineResult && onlineResult.queueType === 'tournament' && (
+          <div className="mt-3 pt-3 border-t border-white/10 flex items-center justify-center gap-4 text-xs font-mono-num">
+            <span className="text-slate-300">
+              Tournament Score:{' '}
+              <strong className="text-amber-300">{yourNewTp} TP</strong>
+            </span>
+            <span className="font-bold text-emerald-400">
+              +{yourTpDelta} TP
+            </span>
+          </div>
+        )}
 
         {/* Animated Winner's Podium Canvas */}
         <div className="mt-4 overflow-hidden rounded-lg border border-white/10 bg-slate-950">
@@ -5473,7 +6594,7 @@ function WinnersPodiumOverlay({
               <span className="text-slate-500" aria-hidden="true">
                 ·
               </span>
-              <span style={{ color: mvpSpec.accentColor }}>{mvpPlayer.name}</span>
+              <span style={{ color: mvpSpec.accentColor }}>{FIGHTER_SPECS[mvpPlayer.id].name}</span>
               {!analysis.winnerIsMvp && (
                 <>
                   <span className="text-slate-500" aria-hidden="true">
@@ -5517,11 +6638,15 @@ function WinnersPodiumOverlay({
               <span className="text-slate-500 mx-1" aria-hidden="true">
                 ·
               </span>
-              <span style={{ color: FIGHTER_SPECS[p1.id].accentColor }}>{p1.name}</span>
+              <span style={{ color: FIGHTER_SPECS[p1.id].accentColor }}>
+                {FIGHTER_SPECS[p1.id].name}
+              </span>
             </div>
             <div className="text-[11px] font-medium text-slate-400 px-3">Feat</div>
             <div className="text-right">
-              <span style={{ color: FIGHTER_SPECS[p2.id].accentColor }}>{p2.name}</span>
+              <span style={{ color: FIGHTER_SPECS[p2.id].accentColor }}>
+                {FIGHTER_SPECS[p2.id].name}
+              </span>
               <span className="text-slate-500 mx-1" aria-hidden="true">
                 ·
               </span>
@@ -5568,7 +6693,10 @@ function WinnersPodiumOverlay({
 
           <div className="mt-1 pt-2.5 border-t border-white/10 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400 font-mono-num">
             <span>
-              Winner Hearts Left: <strong className="text-white">{winner.stocks}</strong>
+              {onlineResult
+                ? `FT3 Series: ${onlineResult.scores[0]} – ${onlineResult.scores[1]}`
+                : `Winner Hearts Left: `}
+              {!onlineResult && <strong className="text-white">{winner.stocks}</strong>}
             </span>
             <span>
               Feat Score: {analysis.players[0].featsLed} – {analysis.players[1].featsLed}
@@ -5578,7 +6706,7 @@ function WinnersPodiumOverlay({
 
         {/* Actions */}
         <div className="mt-5 flex flex-wrap items-center gap-2.5">
-          {replayAvailable && (
+          {replayAvailable && !onlineResult && (
             <button
               type="button"
               onClick={onWatchReplay}
@@ -5588,21 +6716,46 @@ function WinnersPodiumOverlay({
               <span>Watch Replay ({replayDurationSec}s)</span>
             </button>
           )}
-          <button
-            type="button"
-            onClick={onRematch}
-            className="flex-1 py-2.5 px-4 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300"
-          >
-            <RotateCcw className="w-4 h-4" />
-            <span>Rematch</span>
-          </button>
-          <button
-            type="button"
-            onClick={onReturnToTitle}
-            className="py-2.5 px-4 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-sm border border-white/10 transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400"
-          >
-            Arena Setup
-          </button>
+
+          {onlineResult && onReturnToWaitingArea ? (
+            <button
+              type="button"
+              onClick={onReturnToWaitingArea}
+              className={`flex-1 py-2.5 px-4 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                onlineResult.queueType === 'ranked'
+                  ? 'bg-amber-500 hover:bg-amber-400 text-slate-950'
+                  : 'bg-sky-400 hover:bg-sky-300 text-slate-950'
+              }`}
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span>
+                {onlineResult.queueType === 'ranked'
+                  ? 'Return to Ranked Arena'
+                  : onlineResult.queueType === 'tournament'
+                  ? 'Return to Tournament Arena'
+                  : 'Return to Casual Lounge'}
+              </span>
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={onRematch}
+                className="flex-1 py-2.5 px-4 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-300"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>Rematch</span>
+              </button>
+              <button
+                type="button"
+                onClick={onReturnToTitle}
+                className="py-2.5 px-4 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-sm border border-white/10 transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400"
+              >
+                Arena Setup
+              </button>
+            </>
+          )}
+
           <button
             type="button"
             onClick={onReturnToHome}

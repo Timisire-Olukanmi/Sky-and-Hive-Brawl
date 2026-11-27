@@ -10,8 +10,8 @@ export const DIRTY_DOZEN_CASES = [
   { name: 'Collection list scraping on /users', expected: 'PERMISSION_DENIED' },
   { name: 'Invalid private docId (/users/userA/private/other)', expected: 'PERMISSION_DENIED' },
   { name: 'Invalid favoriteFighter enum value', expected: 'PERMISSION_DENIED' },
-  { name: 'Negative or non-int scoreboard wins/losses/streak', expected: 'PERMISSION_DENIED' },
-  { name: 'Oversized displayName (> 32 chars)', expected: 'PERMISSION_DENIED' },
+  { name: 'Negative or overflowing scoreboard / onlineStats / tournamentStats numbers', expected: 'PERMISSION_DENIED' },
+  { name: 'Invalid tournamentStats.cycleId pattern or oversized displayName (> 32 chars)', expected: 'PERMISSION_DENIED' },
   { name: 'Client-spoofed updatedAt timestamp (!= request.time)', expected: 'PERMISSION_DENIED' },
   { name: 'Mutation of immutable uid or createdAt on update', expected: 'PERMISSION_DENIED' },
 ] as const;

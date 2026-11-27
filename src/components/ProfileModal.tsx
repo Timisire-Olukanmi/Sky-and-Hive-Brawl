@@ -1,12 +1,13 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Check, Loader2, X } from 'lucide-react';
 import { FIGHTER_SPECS, MAP_SPECS } from '../game/constants';
-import type { FighterId, PlayMode } from '../game/types';
+import type { FighterId } from '../game/types';
 import { useFirebase } from '../contexts/FirebaseContext';
 import {
   ALL_FIGHTER_IDS,
   ALL_MAP_IDS,
   DISPLAY_NAME_MAX_LENGTH,
+  type LocalPlayMode,
   type MapSelection,
 } from '../types/account';
 
@@ -16,7 +17,7 @@ interface ProfileModalProps {
   onProfileSaved: (saved: {
     favoriteFighter: FighterId;
     defaultMap: MapSelection;
-    preferredMode: PlayMode;
+    preferredMode: LocalPlayMode;
   }) => void;
   onUiClick?: () => void;
 }
@@ -32,7 +33,7 @@ export function ProfileModal({
   const [displayName, setDisplayName] = useState('');
   const [favoriteFighter, setFavoriteFighter] = useState<FighterId>('honey_shell');
   const [defaultMap, setDefaultMap] = useState<MapSelection>('hive_canopy');
-  const [preferredMode, setPreferredMode] = useState<PlayMode>('1P_AI');
+  const [preferredMode, setPreferredMode] = useState<LocalPlayMode>('1P_AI');
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
