@@ -14,4 +14,9 @@ export const DIRTY_DOZEN_CASES = [
   { name: 'Invalid tournamentStats.cycleId pattern or oversized displayName (> 32 chars)', expected: 'PERMISSION_DENIED' },
   { name: 'Client-spoofed updatedAt timestamp (!= request.time)', expected: 'PERMISSION_DENIED' },
   { name: 'Mutation of immutable uid or createdAt on update', expected: 'PERMISSION_DENIED' },
+  { name: 'Cross-user write or UID spoof on /online_presence/userA as userB', expected: 'PERMISSION_DENIED' },
+  { name: 'Non-participant read/write on /online_matches/{matchId} or ICE subcollection as userC', expected: 'PERMISSION_DENIED' },
+  { name: 'Guest mutating host-only offerSdp/hostRelayJson/score0 on /online_matches/{matchId}', expected: 'PERMISSION_DENIED' },
+  { name: 'Cross-user write or invalid points on /tournament_cycles/{cycleId}/standings', expected: 'PERMISSION_DENIED' },
 ] as const;
+

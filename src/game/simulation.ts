@@ -13,7 +13,7 @@ import {
   WORLD_HEIGHT,
   WORLD_WIDTH,
 } from './constants';
-import type { SoundEvent } from './onlineTypes';
+import type { SerializedEngineSnapshot, SoundEvent } from './onlineTypes';
 import type {
   AnimState,
   DestructiblePropRuntime,
@@ -278,6 +278,30 @@ export function buildHudSnapshot(state: GameEngineState): HudSnapshot {
         heavyHitsLanded: state.players[1].heavyHitsLanded,
       },
     ],
+  };
+}
+
+export function serializeEngineSnapshot(state: GameEngineState): SerializedEngineSnapshot {
+  return {
+    phase: state.phase,
+    mode: state.mode,
+    mapId: state.mapId,
+    matchTime: state.matchTime,
+    ambientTime: state.ambientTime,
+    hitstopTimer: state.hitstopTimer,
+    shakeIntensity: state.shakeIntensity,
+    lightningFlash: state.lightningFlash,
+    windForceX: state.windForceX,
+    winnerSlot: state.winnerSlot,
+    players: state.players,
+    platforms: state.platforms,
+    obstacles: state.obstacles,
+    destructibles: state.destructibles,
+    projectiles: state.projectiles,
+    zones: state.zones,
+    slashes: state.slashes,
+    activeParticles: state.particles.filter((p) => p.active),
+    floatingNumbers: state.floatingNumbers,
   };
 }
 

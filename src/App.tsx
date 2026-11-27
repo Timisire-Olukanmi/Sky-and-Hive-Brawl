@@ -51,6 +51,16 @@ import { PixelFighterPortrait } from './components/PixelFighterPortrait';
 import { ProfileModal } from './components/ProfileModal';
 import { TrainingConfigPanel } from './components/TrainingConfigPanel';
 import { AudioSettingsControls } from './components/AudioSettingsControls';
+import {
+  clearTouchHeldState,
+  createEmptyTouchInputState,
+  detectCoarseTouchDevice,
+  loadTouchControlsPreference,
+  MobileControls,
+  saveTouchControlsPreference,
+  type TouchControlsPreference,
+  type TouchInputState,
+} from './components/MobileControls';
 import { useFirebase } from './contexts/FirebaseContext';
 import {
   useOnlineMultiplayer,
@@ -565,6 +575,23 @@ export default function App() {
   const audioSettingsOpenRef = useRef(false);
   audioSettingsOpenRef.current = audioSettingsOpen;
 
+  const [touchControlsPref, setTouchControlsPref] = useState<TouchControlsPreference>(() =>
+    loadTouchControlsPreference()
+  );
+  const [isTouchDevice, setIsTouchDevice] = useState<boolean>(() => detectCoarseTouchDevice());
+
+  useEffect(() => {
+    const updateTouchDetection = () => setIsTouchDevice(detectCoarseTouchDevice());
+    updateTouchDetection();
+    window.addEventListener('resize', updateTouchDetection);
+    return () => window.removeEventListener('resize', updateTouchDetection);
+  }, []);
+
+  const handleChangeTouchControlsPref = useCallback((pref: TouchControlsPreference) => {
+    setTouchControlsPref(pref);
+    saveTouchControlsPreference(pref);
+  }, []);
+
   const [trainingDummyConfig, setTrainingDummyConfig] = useState<TrainingDummyConfig>(
     () => ({ ...DEFAULT_TRAINING_DUMMY_CONFIG })
   );
@@ -626,6 +653,7 @@ export default function App() {
 
   const heldKeysRef = useRef<Set<string>>(new Set());
   const justPressedRef = useRef<Set<string>>(new Set());
+  const touchStateRef = useRef<TouchInputState>(createEmptyTouchInputState());
 
   const [hud, setHud] = useState<HudSnapshot>(() => buildHudSnapshot(engineRef.current));
   const lastHudSyncRef = useRef<number>(0);
@@ -670,6 +698,7 @@ export default function App() {
   const {
     connected: wsConnected,
     clientId: wsClientId,
+    roomCode,
     waitingSnapshot,
     tournamentSnapshot,
     inQueue,
@@ -681,6 +710,8 @@ export default function App() {
     enterWaitingArea,
     joinQueue,
     leaveQueue,
+    challengePlayer,
+    joinRoomByCode,
     sendMatchInput,
     leaveMatch,
     clearSeriesResult,
@@ -814,6 +845,53 @@ export default function App() {
     tournamentStats.streak,
     tournamentStats.wins,
     user?.uid,
+  ]);
+
+  const pendingInviteRoomRef = useRef<string | null>(
+    typeof window !== 'undefined'
+      ? (() => {
+          const code = new URLSearchParams(window.location.search).get('room');
+          return code ? code.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) : null;
+        })()
+      : null
+  );
+
+  useEffect(() => {
+    const code = pendingInviteRoomRef.current;
+    if (!code || code.length < 4) return;
+    if (engineRef.current.phase !== 'ONLINE_CASUAL') {
+      engineRef.current.phase = 'ONLINE_CASUAL';
+      syncHudImmediate();
+      return;
+    }
+    if (!wsConnected) return;
+    const targetExists = waitingSnapshot.casualWaiting.some((e) => e.roomCode === code);
+    if (!targetExists) return;
+    pendingInviteRoomRef.current = null;
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('room');
+      window.history.replaceState({}, '', url.toString());
+    } catch {
+      // Ignore history errors
+    }
+    void joinRoomByCode(code, {
+      accountUid: user?.uid,
+      displayName: onlinePlayerName,
+      fighterId: p1Fighter,
+      preferredMap: selectedMap,
+      rankedPoints: onlineStats.rankedPoints,
+    });
+  }, [
+    joinRoomByCode,
+    onlinePlayerName,
+    onlineStats.rankedPoints,
+    p1Fighter,
+    selectedMap,
+    syncHudImmediate,
+    user?.uid,
+    waitingSnapshot.casualWaiting,
+    wsConnected,
   ]);
 
   const syncReplayUi = useCallback((frameIdx: number) => {
@@ -3764,8 +3842,9 @@ export default function App() {
         const just = justPressedRef.current;
 
         if (f.slot === 0) {
-          if (held.has('KeyA')) moveDir -= 1;
-          if (held.has('KeyD')) moveDir += 1;
+          const touch = touchStateRef.current;
+          if (held.has('KeyA') || touch.left) moveDir -= 1;
+          if (held.has('KeyD') || touch.right) moveDir += 1;
           const singleHumanMode =
             engineRef.current.mode === '1P_AI' || engineRef.current.mode === 'TRAINING';
           if (singleHumanMode) {
@@ -3776,11 +3855,11 @@ export default function App() {
           if (isConfused) moveDir = -moveDir;
 
           const rawUpHeld =
-            held.has('KeyW') || (singleHumanMode && held.has('ArrowUp'));
+            held.has('KeyW') || touch.jumpHeld || (singleHumanMode && held.has('ArrowUp'));
           const rawUpJust =
-            just.has('KeyW') || (singleHumanMode && just.has('ArrowUp'));
+            just.has('KeyW') || touch.justJump || (singleHumanMode && just.has('ArrowUp'));
           const rawDownHeld =
-            held.has('KeyS') || (singleHumanMode && held.has('ArrowDown'));
+            held.has('KeyS') || touch.downHeld || (singleHumanMode && held.has('ArrowDown'));
           const rawDownJust =
             just.has('KeyS') || (singleHumanMode && just.has('ArrowDown'));
 
@@ -3788,15 +3867,24 @@ export default function App() {
           jumpPressed = isConfused ? rawDownJust : rawUpJust;
           downHeld = isConfused ? rawUpHeld : rawDownHeld;
 
-          if (just.has('KeyR') || (upHeld && just.has('KeyK'))) {
+          if (just.has('KeyR') || touch.justRecovery || (upHeld && just.has('KeyK'))) {
             directMove = 'recovery';
           } else if (just.has('KeyU')) directMove = 'attack1';
           else if (just.has('KeyI')) directMove = 'attack2';
           else if (just.has('KeyO')) directMove = 'attack3';
-          else if (just.has('KeyK')) directMove = 'special';
-          else if (just.has('KeyL')) directMove = 'ultimate';
-          else if (just.has('KeyT')) tauntPressed = true;
-          else if (just.has('KeyJ') || just.has('Space')) attackComboPressed = true;
+          else if (just.has('KeyK') || touch.justSpecial) directMove = 'special';
+          else if (just.has('KeyL') || touch.justUltimate) directMove = 'ultimate';
+          else if (just.has('KeyT') || touch.justTaunt) tauntPressed = true;
+          else if (just.has('KeyJ') || just.has('Space') || touch.justAttackCombo) {
+            attackComboPressed = true;
+          }
+
+          touch.justJump = false;
+          touch.justAttackCombo = false;
+          touch.justSpecial = false;
+          touch.justRecovery = false;
+          touch.justUltimate = false;
+          touch.justTaunt = false;
         } else {
           if (held.has('ArrowLeft')) moveDir -= 1;
           if (held.has('ArrowRight')) moveDir += 1;
@@ -5084,18 +5172,19 @@ export default function App() {
         const match = activeMatchRef.current;
         const held = heldKeysRef.current;
         const just = justPressedRef.current;
+        const touch = touchStateRef.current;
 
         let moveDir = 0;
-        if (held.has('KeyA') || held.has('ArrowLeft')) moveDir -= 1;
-        if (held.has('KeyD') || held.has('ArrowRight')) moveDir += 1;
+        if (held.has('KeyA') || held.has('ArrowLeft') || touch.left) moveDir -= 1;
+        if (held.has('KeyD') || held.has('ArrowRight') || touch.right) moveDir += 1;
         moveDir = Math.max(-1, Math.min(1, moveDir));
 
-        const jumpHeld = held.has('KeyW') || held.has('ArrowUp');
-        const downHeld = held.has('KeyS') || held.has('ArrowDown');
+        const jumpHeld = held.has('KeyW') || held.has('ArrowUp') || touch.jumpHeld;
+        const downHeld = held.has('KeyS') || held.has('ArrowDown') || touch.downHeld;
         const actions: OnlineInputActions = {};
 
-        if (just.has('KeyW') || just.has('ArrowUp')) actions.jump = true;
-        if (just.has('KeyR') || (jumpHeld && just.has('KeyK'))) {
+        if (just.has('KeyW') || just.has('ArrowUp') || touch.justJump) actions.jump = true;
+        if (just.has('KeyR') || touch.justRecovery || (jumpHeld && just.has('KeyK'))) {
           actions.recovery = true;
         } else if (just.has('KeyU')) {
           actions.attack1 = true;
@@ -5103,13 +5192,13 @@ export default function App() {
           actions.attack2 = true;
         } else if (just.has('KeyO')) {
           actions.attack3 = true;
-        } else if (just.has('KeyK')) {
+        } else if (just.has('KeyK') || touch.justSpecial) {
           actions.special = true;
-        } else if (just.has('KeyL')) {
+        } else if (just.has('KeyL') || touch.justUltimate) {
           actions.ultimate = true;
-        } else if (just.has('KeyT')) {
+        } else if (just.has('KeyT') || touch.justTaunt) {
           actions.taunt = true;
-        } else if (just.has('KeyJ') || just.has('Space')) {
+        } else if (just.has('KeyJ') || just.has('Space') || touch.justAttackCombo) {
           actions.attackCombo = true;
         }
 
@@ -5132,6 +5221,12 @@ export default function App() {
         }
 
         justPressedRef.current.clear();
+        touch.justJump = false;
+        touch.justAttackCombo = false;
+        touch.justSpecial = false;
+        touch.justRecovery = false;
+        touch.justUltimate = false;
+        touch.justTaunt = false;
         stepVisualEffects(dt * 0.45);
       } else if (state.phase === 'PLAYING') {
         state.matchTime += dt;
@@ -5245,6 +5340,26 @@ export default function App() {
   const p2Spec = FIGHTER_SPECS[p2.id];
 
   const winner = hud.winnerSlot !== null ? hud.players[hud.winnerSlot] : null;
+  const showMobileControls =
+    hud.phase === 'PLAYING' &&
+    (touchControlsPref === 'on' || (touchControlsPref === 'auto' && isTouchDevice));
+
+  useEffect(() => {
+    if (!showMobileControls) {
+      clearTouchHeldState(touchStateRef.current);
+    }
+  }, [showMobileControls]);
+
+  const controlledPlayer = activeMatch
+    ? activeMatch.yourSlot === 0
+      ? p1
+      : p2
+    : p1;
+  const controlledSpec = activeMatch
+    ? activeMatch.yourSlot === 0
+      ? p1Spec
+      : p2Spec
+    : p1Spec;
 
   return (
     <div
@@ -5255,7 +5370,7 @@ export default function App() {
       <canvas ref={canvasRef} className="block w-full h-full pixelated" />
 
       {/* Top-Right Utility Controls */}
-      <div className="absolute top-4 right-4 z-30 flex items-center gap-2">
+      <div className="absolute top-2.5 right-2.5 sm:top-4 sm:right-4 z-30 flex items-center gap-1.5 sm:gap-2">
         {hud.phase !== 'PAUSED' && (
           <div className="relative">
             <button
@@ -5264,9 +5379,9 @@ export default function App() {
                 soundSynth.playUiClick();
                 setAudioSettingsOpen((prev) => !prev);
               }}
-              aria-label="Audio settings"
+              aria-label="Audio and controls settings"
               aria-expanded={audioSettingsOpen}
-              className={`h-10 px-3 flex items-center gap-1.5 rounded-lg border text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`h-9 sm:h-10 px-2.5 sm:px-3 flex items-center gap-1.5 rounded-lg border text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 audioSettingsOpen
                   ? 'bg-slate-800 border-amber-400/50 text-amber-300'
                   : 'bg-slate-950/80 border-white/15 text-slate-200 hover:bg-slate-900 hover:text-white'
@@ -5277,13 +5392,13 @@ export default function App() {
             </button>
 
             {audioSettingsOpen && (
-              <div className="absolute right-0 top-12 w-72 sm:w-80 bg-slate-900 border border-white/15 rounded-xl p-3.5 shadow-2xl z-40">
+              <div className="absolute right-0 top-11 sm:top-12 w-72 sm:w-80 max-w-[calc(100vw-1.25rem)] bg-slate-900 border border-white/15 rounded-xl p-3.5 shadow-2xl z-40">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-bold text-white">Sound &amp; Music</span>
+                  <span className="text-xs font-bold text-white">Sound &amp; Controls</span>
                   <button
                     type="button"
                     onClick={() => setAudioSettingsOpen(false)}
-                    aria-label="Close audio settings"
+                    aria-label="Close settings"
                     className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
                   >
                     <X className="w-3.5 h-3.5" aria-hidden="true" />
@@ -5293,11 +5408,13 @@ export default function App() {
                   musicVolume={musicVolume}
                   sfxVolume={sfxVolume}
                   muted={muted}
+                  touchControlsPref={touchControlsPref}
                   activeStageId={
                     hud.phase === 'PLAYING' || hud.phase === 'REPLAY' ? hud.mapId : null
                   }
                   onChangeMusicVolume={setMusicVolume}
                   onChangeSfxVolume={setSfxVolume}
+                  onChangeTouchControlsPref={handleChangeTouchControlsPref}
                   onPreviewSfx={() => soundSynth.playUiClick()}
                   onToggleMute={toggleMute}
                 />
@@ -5310,7 +5427,7 @@ export default function App() {
           type="button"
           onClick={toggleMute}
           aria-label={muted ? 'Unmute audio' : 'Mute audio'}
-          className="h-10 w-10 flex items-center justify-center rounded-lg bg-slate-950/80 border border-white/15 text-slate-200 hover:bg-slate-900 hover:text-white transition-colors cursor-pointer"
+          className="h-9 w-9 sm:h-10 sm:w-10 flex items-center justify-center rounded-lg bg-slate-950/80 border border-white/15 text-slate-200 hover:bg-slate-900 hover:text-white transition-colors cursor-pointer"
         >
           {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
         </button>
@@ -5320,10 +5437,11 @@ export default function App() {
             type="button"
             onClick={handleLeaveOnlineMatch}
             aria-label="Leave online match"
-            className="h-10 px-3 flex items-center gap-1.5 rounded-lg bg-slate-950/85 border border-rose-400/35 text-rose-200 hover:bg-rose-950/80 hover:text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="h-9 sm:h-10 px-2.5 sm:px-3 flex items-center gap-1.5 rounded-lg bg-slate-950/85 border border-rose-400/35 text-rose-200 hover:bg-rose-950/80 hover:text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <LogOut className="w-3.5 h-3.5" />
-            <span>Leave Match</span>
+            <span>Leave</span>
+            <span className="hidden sm:inline">Match</span>
           </button>
         )}
 
@@ -5332,7 +5450,7 @@ export default function App() {
             type="button"
             onClick={togglePause}
             aria-label={hud.phase === 'PAUSED' ? 'Resume match' : 'Pause match'}
-            className="h-10 px-3 flex items-center gap-1.5 rounded-lg bg-slate-950/80 border border-white/15 text-slate-200 hover:bg-slate-900 hover:text-white text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="h-9 sm:h-10 px-2.5 sm:px-3 flex items-center gap-1.5 rounded-lg bg-slate-950/80 border border-white/15 text-slate-200 hover:bg-slate-900 hover:text-white text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             {hud.phase === 'PAUSED' ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
             <span>{hud.phase === 'PAUSED' ? 'Resume' : 'Pause'}</span>
@@ -5343,18 +5461,73 @@ export default function App() {
           <button
             type="button"
             onClick={exitReplay}
-            className="h-10 px-3 flex items-center gap-1.5 rounded-lg bg-slate-950/85 border border-white/15 text-slate-200 hover:bg-slate-900 hover:text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="h-9 sm:h-10 px-2.5 sm:px-3 flex items-center gap-1.5 rounded-lg bg-slate-950/85 border border-white/15 text-slate-200 hover:bg-slate-900 hover:text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Back to Results</span>
+            <span>Back</span>
+            <span className="hidden sm:inline">to Results</span>
           </button>
         )}
       </div>
 
       {/* Unobstructed Active Match & Replay Perimeter HUD */}
       {(hud.phase === 'PLAYING' || hud.phase === 'PAUSED' || hud.phase === 'REPLAY') && (
-        <div className="pointer-events-none absolute inset-0 z-20 flex flex-col justify-between p-4 sm:p-6">
-          <div className="flex items-start justify-between gap-4 pr-28 sm:pr-40">
+        <div className="pointer-events-none absolute inset-0 z-20 flex flex-col justify-between p-2.5 sm:p-6">
+          {/* Compact Mobile Status Pill (Top-Left, clear of top-right buttons) */}
+          <div className="md:hidden absolute top-2.5 left-2.5 flex items-center gap-1.5">
+            {hud.phase === 'REPLAY' ? (
+              <div className="bg-slate-950/85 border border-amber-400/35 rounded-lg px-2.5 py-1.5 flex items-center gap-2 text-[11px] font-mono-num">
+                <span className="font-extrabold text-amber-400">REPLAY {replayHud.speed}x</span>
+                <span className="text-white font-bold">
+                  {replayHud.elapsed.toFixed(1)}s/{replayHud.duration.toFixed(1)}s
+                </span>
+              </div>
+            ) : activeMatch ? (
+              <div
+                className={`bg-slate-950/88 border rounded-lg px-2.5 py-1.5 flex items-center gap-2 text-[11px] font-mono-num ${
+                  activeMatch.queueType === 'ranked' || activeMatch.queueType === 'tournament'
+                    ? 'border-amber-400/35'
+                    : 'border-sky-400/35'
+                }`}
+              >
+                <span
+                  className={`font-bold uppercase ${
+                    activeMatch.queueType === 'ranked' || activeMatch.queueType === 'tournament'
+                      ? 'text-amber-300'
+                      : 'text-sky-300'
+                  }`}
+                >
+                  {activeMatch.queueType === 'ranked'
+                    ? 'RNK'
+                    : activeMatch.queueType === 'tournament'
+                    ? 'TRN'
+                    : 'CAS'}
+                </span>
+                <span className="font-extrabold text-white">
+                  {activeMatch.scores[0]}–{activeMatch.scores[1]}
+                </span>
+                <span className="text-slate-400">R{activeMatch.round}</span>
+              </div>
+            ) : hud.mode === 'TRAINING' ? (
+              <div className="bg-slate-950/85 border border-emerald-400/30 rounded-lg px-2.5 py-1.5 flex items-center gap-2 text-[11px] font-mono-num">
+                <span className="font-bold text-emerald-300">TRAIN</span>
+                <span className="font-extrabold text-amber-300">
+                  {p1.currentComboCount > 0 ? `${p1.currentComboCount}x` : `${p1.lastComboCount}x`}
+                </span>
+                <span className="text-slate-300">Best {p1.longestCombo}x</span>
+              </div>
+            ) : (
+              <div className="bg-slate-950/85 border border-white/15 rounded-lg px-2.5 py-1.5 flex items-center gap-2 text-[11px] font-mono-num">
+                <span className="font-bold text-white">
+                  {String(Math.floor(hud.matchTime / 60)).padStart(2, '0')}:
+                  {String(hud.matchTime % 60).padStart(2, '0')}
+                </span>
+                <span className="text-slate-400 truncate max-w-[90px]">{MAP_SPECS[hud.mapId].name}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="pt-11 sm:pt-0 flex items-start justify-between gap-2 sm:gap-4 sm:pr-44">
             <FighterHudCard
               player={p1}
               spec={p1Spec}
@@ -5674,7 +5847,7 @@ export default function App() {
                 </span>
               </div>
             </div>
-          ) : hud.mode === 'TRAINING' ? (
+          ) : !showMobileControls && hud.mode === 'TRAINING' ? (
             <div className="flex flex-wrap items-center justify-center gap-2">
               <div className="pointer-events-auto flex items-center gap-1.5">
                 <button
@@ -5696,7 +5869,7 @@ export default function App() {
                 WASD/Arrows Move · J Combo · K Special · R (W+K) Recovery · L Ultimate · Esc Pause
               </p>
             </div>
-          ) : (
+          ) : !showMobileControls ? (
             <div className="flex justify-center">
               <p className="text-[11px] text-slate-200/75 font-medium tracking-wide bg-slate-950/55 px-3 py-1 rounded-md border border-white/10 whitespace-nowrap">
                 {activeMatch
@@ -5706,8 +5879,20 @@ export default function App() {
                   : 'P1: WASD + J/K/R/L/T · P2: Arrows + , / . / \\ / / / ; · Esc Pause'}
               </p>
             </div>
-          )}
+          ) : null}
         </div>
+      )}
+
+      {/* Multi-Touch Mobile Controls Overlay */}
+      {showMobileControls && (
+        <MobileControls
+          touchStateRef={touchStateRef}
+          ultCharge={controlledPlayer.ultCharge}
+          fighterAccentColor={controlledSpec.accentColor}
+          isTrainingMode={hud.mode === 'TRAINING'}
+          onRefillTrainingUlt={refillTrainingUlt}
+          onResetTraining={resetTrainingSession}
+        />
       )}
 
       {/* Token Wars Dark Home Screen with Sign Up & Login */}
@@ -5742,6 +5927,7 @@ export default function App() {
         <OnlineCasualScreen
           connected={wsConnected}
           clientId={wsClientId}
+          roomCode={roomCode}
           playerName={onlinePlayerName}
           selectedFighter={p1Fighter}
           selectedMap={selectedMap}
@@ -5755,6 +5941,24 @@ export default function App() {
           onSelectMap={setSelectedMap}
           onJoinCasualQueue={() =>
             joinQueue('casual', {
+              accountUid: user?.uid,
+              displayName: onlinePlayerName,
+              fighterId: p1Fighter,
+              preferredMap: selectedMap,
+              rankedPoints: onlineStats.rankedPoints,
+            })
+          }
+          onChallengePlayer={(targetUid) =>
+            void challengePlayer(targetUid, 'casual', {
+              accountUid: user?.uid,
+              displayName: onlinePlayerName,
+              fighterId: p1Fighter,
+              preferredMap: selectedMap,
+              rankedPoints: onlineStats.rankedPoints,
+            })
+          }
+          onJoinByRoomCode={(code) =>
+            void joinRoomByCode(code, {
               accountUid: user?.uid,
               displayName: onlinePlayerName,
               fighterId: p1Fighter,
@@ -6121,9 +6325,11 @@ export default function App() {
                 musicVolume={musicVolume}
                 sfxVolume={sfxVolume}
                 muted={muted}
+                touchControlsPref={touchControlsPref}
                 activeStageId={hud.mapId}
                 onChangeMusicVolume={setMusicVolume}
                 onChangeSfxVolume={setSfxVolume}
+                onChangeTouchControlsPref={handleChangeTouchControlsPref}
                 onPreviewSfx={() => soundSynth.playUiClick()}
                 onToggleMute={toggleMute}
               />
@@ -6239,40 +6445,40 @@ function FighterHudCard({
 
   return (
     <div
-      className={`w-60 sm:w-72 bg-slate-950/80 border border-white/15 rounded-xl p-3 shadow-lg ${
+      className={`flex-1 min-w-0 max-w-[178px] sm:flex-none sm:max-w-none sm:w-64 md:w-72 bg-slate-950/80 border border-white/15 rounded-xl p-2 sm:p-3 shadow-lg ${
         align === 'right' ? 'text-right' : 'text-left'
       }`}
     >
       <div
-        className={`flex items-baseline justify-between gap-2 ${
+        className={`flex items-baseline justify-between gap-1.5 sm:gap-2 ${
           align === 'right' ? 'flex-row-reverse' : ''
         }`}
       >
-        <div className="flex items-baseline gap-1.5 min-w-0">
+        <div className="flex items-baseline gap-1 sm:gap-1.5 min-w-0">
           <span
-            className="font-mono-num text-xs font-bold shrink-0"
+            className="font-mono-num text-[11px] sm:text-xs font-bold shrink-0"
             style={{ color: accentColor }}
           >
             {tag}
           </span>
-          <span className="font-display font-bold text-sm text-white truncate">
+          <span className="font-display font-bold text-xs sm:text-sm text-white truncate">
             {displayName}
           </span>
         </div>
 
         {player.isDummy ? (
-          <span className="font-mono-num text-[11px] font-semibold text-emerald-300 shrink-0">
-            Static Target
+          <span className="font-mono-num text-[10px] sm:text-[11px] font-semibold text-emerald-300 shrink-0">
+            Dummy
           </span>
         ) : (
-          <div className="flex items-center gap-1 shrink-0" aria-label={`${player.stocks} hearts remaining`}>
+          <div className="flex items-center gap-0.5 sm:gap-1 shrink-0" aria-label={`${player.stocks} hearts remaining`}>
             {Array.from({ length: maxStocks }).map((_, idx) => {
               const filled = idx < player.stocks;
               return (
                 <svg
                   key={idx}
                   viewBox="0 0 24 24"
-                  className="w-3.5 h-3.5"
+                  className="w-3 h-3 sm:w-3.5 sm:h-3.5"
                   aria-hidden="true"
                 >
                   <path
@@ -6288,7 +6494,7 @@ function FighterHudCard({
         )}
       </div>
 
-      <div className="mt-2 h-2.5 w-full bg-slate-800 rounded-full overflow-hidden">
+      <div className="mt-1.5 sm:mt-2 h-2 sm:h-2.5 w-full bg-slate-800 rounded-full overflow-hidden">
         <div
           className="h-full transition-[width] duration-75"
           style={{
@@ -6299,21 +6505,21 @@ function FighterHudCard({
       </div>
 
       <div
-        className={`mt-1.5 flex items-center justify-between text-[11px] font-mono-num text-slate-300 ${
+        className={`mt-1 sm:mt-1.5 flex items-center justify-between gap-1 text-[10px] sm:text-[11px] font-mono-num text-slate-300 ${
           align === 'right' ? 'flex-row-reverse' : ''
         }`}
       >
-        <span>
-          HP {player.hp}/{player.maxHp}
+        <span className="truncate">
+          {player.hp}/{player.maxHp}
         </span>
         {player.isDummy ? (
-          <span className="text-slate-400">Auto-Heals</span>
+          <span className="text-slate-400 hidden sm:inline">Auto-Heals</span>
         ) : (
           <span className={ultReady ? 'text-amber-300 font-bold' : 'text-slate-400'}>
             ULT {ultReady ? 'READY' : `${player.ultCharge}%`}
           </span>
         )}
-        <span className="text-slate-400 truncate max-w-[100px]">
+        <span className="hidden sm:inline text-slate-400 truncate max-w-[100px]">
           {activeStatuses.length > 0
             ? activeStatuses.join(' · ')
             : sublabelOverride ?? formatAnimLabel(player.animState)}

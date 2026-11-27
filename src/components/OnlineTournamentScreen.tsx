@@ -112,15 +112,15 @@ export function OnlineTournamentScreen({
   return (
     <div className="absolute inset-0 z-20 flex flex-col items-center justify-start gap-4 overflow-y-auto px-4 sm:px-6 py-4 sm:py-6 bg-gradient-to-b from-slate-950/95 via-amber-950/30 to-slate-950/96 backdrop-blur-[2px]">
       {/* Tournament Top Header */}
-      <header className="w-full max-w-6xl flex flex-wrap items-center justify-between gap-3 shrink-0">
-        <div className="flex items-center gap-3 min-w-0">
+      <header className="w-full max-w-6xl flex flex-wrap items-center justify-between gap-2.5 shrink-0">
+        <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
           <button
             type="button"
             onClick={() => {
               onUiClick?.();
               onBackHome();
             }}
-            className="h-9 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 border border-white/15 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="h-10 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 border border-white/15 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" />
             <span>Home</span>
@@ -129,23 +129,23 @@ export function OnlineTournamentScreen({
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <Crown className="w-4 h-4 text-amber-400 shrink-0" aria-hidden="true" />
-              <h1 className="font-display text-lg sm:text-xl font-extrabold text-white truncate">
+              <h1 className="font-display text-base sm:text-xl font-extrabold text-white truncate">
                 Bi-Weekly Tournament Arena
               </h1>
             </div>
-            <p className="text-xs text-amber-200/80 truncate">
-              Open {TOURNAMENT_ACTIVE_DAYS} Days Every {TOURNAMENT_CYCLE_DAYS / 7} Weeks · First to{' '}
-              {TARGET_SERIES_WINS} Round Wins · {ONLINE_ROUND_STOCKS} Hearts/Round
+            <p className="text-[11px] sm:text-xs text-amber-200/80 truncate">
+              Global Cloud Server · Open {TOURNAMENT_ACTIVE_DAYS} Days Every {TOURNAMENT_CYCLE_DAYS / 7} Weeks · First to{' '}
+              {TARGET_SERIES_WINS}
             </p>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1.5 text-xs font-mono-num text-slate-300 px-2.5 py-1.5 rounded-lg bg-slate-900/90 border border-white/10">
+          <div className="flex items-center gap-1.5 text-xs font-mono-num text-slate-300 px-2.5 py-2 rounded-lg bg-slate-900/90 border border-white/10">
             {connected ? (
               <>
                 <Wifi className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />
-                <span>Tournament Server Live</span>
+                <span>Cloud Server Live</span>
               </>
             ) : (
               <>
@@ -161,7 +161,7 @@ export function OnlineTournamentScreen({
               onUiClick?.();
               onSwitchToCasual();
             }}
-            className="h-9 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 text-sky-300 border border-sky-400/30 text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="h-10 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 text-sky-300 border border-sky-400/30 text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             Casual Lounge
           </button>
@@ -172,7 +172,7 @@ export function OnlineTournamentScreen({
               onUiClick?.();
               onSwitchToRanked();
             }}
-            className="h-9 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 text-amber-300 border border-amber-400/30 text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="h-10 px-3 rounded-lg bg-slate-900 hover:bg-slate-800 text-amber-300 border border-amber-400/30 text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             Ranked Arena
           </button>

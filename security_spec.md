@@ -23,3 +23,8 @@
 10. **Invalid Tournament Cycle ID / Display Name Exhaustion**: Authenticated as `userA` writing `tournamentStats.cycleId: "evil_payload"` or a 500-char `displayName`.
 11. **Client-Spoofed Timestamp**: Authenticated as `userA` creating/updating with `createdAt` or `updatedAt` not equal to `request.time`.
 12. **Immutable Field Mutation**: Authenticated as `userA` updating `/users/userA` while changing `createdAt` or `uid`.
+13. **Cross-User Presence Hijack**: Authenticated as `userB` attempting to create, update, or delete `/online_presence/userA` or spoof `uid: "userA"`.
+14. **Non-Participant Match Eavesdropping / Signaling Tamper**: Authenticated as `userC` attempting `get`, `update`, or `ice` candidate write on `/online_matches/m_A_vs_B` where neither `hostUid` nor `guestUid` is `userC`.
+15. **Guest Overwriting Host Match Fields**: Authenticated as `guestUid` attempting to tamper with `score0`, `offerSdp`, or `hostRelayJson` on `/online_matches/{matchId}`.
+16. **Tournament Standing Spoofing**: Authenticated as `userB` attempting to write `/tournament_cycles/cycle_1/standings/userA` or inject negative/overflowing points.
+

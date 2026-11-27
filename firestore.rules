@@ -42,7 +42,7 @@ service cloud.firestore {
       ];
     }
 
-    function isValidMapSelection(mapId) {
+    function isValidMapId(mapId) {
       return mapId in [
         'hive_canopy',
         'storm_citadel',
@@ -53,13 +53,23 @@ service cloud.firestore {
         'frost_glacier',
         'cyber_factory',
         'coral_abyss',
-        'cosmic_station',
-        'random'
+        'cosmic_station'
       ];
+    }
+
+    function isValidMapSelection(mapId) {
+      return mapId == 'random' || isValidMapId(mapId);
     }
 
     function isValidPlayMode(mode) {
       return mode in ['1P_AI', '2P_LOCAL'];
+    }
+
+    function isValidCycleId(cycleId) {
+      return cycleId is string
+        && cycleId.size() >= 1
+        && cycleId.size() <= 32
+        && cycleId.matches('^(cycle_[0-9]+|none)$');
     }
 
     function isValidPlayerRecord(rec) {
@@ -130,10 +140,7 @@ service cloud.firestore {
           'careerLosses',
           'trophies'
         ])
-        && stats.cycleId is string
-        && stats.cycleId.size() >= 1
-        && stats.cycleId.size() <= 32
-        && stats.cycleId.matches('^(cycle_[0-9]+|none)$')
+        && isValidCycleId(stats.cycleId)
         && stats.points is int && stats.points >= 0 && stats.points <= 100000
         && stats.wins is int && stats.wins >= 0 && stats.wins <= 1000000
         && stats.losses is int && stats.losses >= 0 && stats.losses <= 1000000
@@ -223,6 +230,274 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidOnlinePresence(data, userId) {
+      return data.keys().hasAll([
+          'uid',
+          'displayName',
+          'area',
+          'queue',
+          'status',
+          'fighterId',
+          'preferredMap',
+          'rankedPoints',
+          'tournamentPoints',
+          'tournamentWins',
+          'tournamentLosses',
+          'tournamentStreak',
+          'tournamentCycleId',
+          'matchId',
+          'roomCode',
+          'queueEnteredAt',
+          'heartbeatAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid',
+          'displayName',
+          'area',
+          'queue',
+          'status',
+          'fighterId',
+          'preferredMap',
+          'rankedPoints',
+          'tournamentPoints',
+          'tournamentWins',
+          'tournamentLosses',
+          'tournamentStreak',
+          'tournamentCycleId',
+          'matchId',
+          'roomCode',
+          'queueEnteredAt',
+          'heartbeatAt',
+          'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 32
+        && data.area in ['none', 'casual', 'ranked', 'tournament']
+        && data.queue in ['none', 'casual', 'ranked', 'tournament']
+        && data.status in ['waiting', 'queued', 'in_match']
+        && data.fighterId is string && isValidFighterId(data.fighterId)
+        && data.preferredMap is string && isValidMapSelection(data.preferredMap)
+        && data.rankedPoints is int && data.rankedPoints >= 0 && data.rankedPoints <= 10000
+        && data.tournamentPoints is int && data.tournamentPoints >= 0 && data.tournamentPoints <= 100000
+        && data.tournamentWins is int && data.tournamentWins >= 0 && data.tournamentWins <= 1000000
+        && data.tournamentLosses is int && data.tournamentLosses >= 0 && data.tournamentLosses <= 1000000
+        && data.tournamentStreak is int && data.tournamentStreak >= 0 && data.tournamentStreak <= 1000000
+        && isValidCycleId(data.tournamentCycleId)
+        && data.matchId is string && data.matchId.size() <= 128 && data.matchId.matches('^($|m_[a-zA-Z0-9_\\-]+)$')
+        && data.roomCode is string && data.roomCode.size() <= 12 && data.roomCode.matches('^($|[A-Z0-9]{4,8})$')
+        && data.queueEnteredAt is int && data.queueEnteredAt >= 0 && data.queueEnteredAt <= 9999999999999
+        && data.heartbeatAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOnlineMatch(data, matchId) {
+      return data.keys().hasAll([
+          'matchId',
+          'queueType',
+          'hostUid',
+          'guestUid',
+          'mapId',
+          'status',
+          'p0Name',
+          'p0Fighter',
+          'p0Rp',
+          'p0Tp',
+          'p1Name',
+          'p1Fighter',
+          'p1Rp',
+          'p1Tp',
+          'tournamentCycleId',
+          'tournamentTitle',
+          'offerSdp',
+          'answerSdp',
+          'hostRelayJson',
+          'guestRelayJson',
+          'score0',
+          'score1',
+          'winnerSlot',
+          'finishReason',
+          'matchDurationSec',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'matchId',
+          'queueType',
+          'hostUid',
+          'guestUid',
+          'mapId',
+          'status',
+          'p0Name',
+          'p0Fighter',
+          'p0Rp',
+          'p0Tp',
+          'p1Name',
+          'p1Fighter',
+          'p1Rp',
+          'p1Tp',
+          'tournamentCycleId',
+          'tournamentTitle',
+          'offerSdp',
+          'answerSdp',
+          'hostRelayJson',
+          'guestRelayJson',
+          'score0',
+          'score1',
+          'winnerSlot',
+          'finishReason',
+          'matchDurationSec',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.matchId == matchId
+        && data.queueType in ['casual', 'ranked', 'tournament']
+        && isValidId(data.hostUid)
+        && isValidId(data.guestUid)
+        && data.hostUid != data.guestUid
+        && data.mapId is string && isValidMapId(data.mapId)
+        && data.status in ['signaling', 'active', 'finished']
+        && data.p0Name is string && data.p0Name.size() >= 1 && data.p0Name.size() <= 32
+        && data.p0Fighter is string && isValidFighterId(data.p0Fighter)
+        && data.p0Rp is int && data.p0Rp >= 0 && data.p0Rp <= 10000
+        && data.p0Tp is int && data.p0Tp >= 0 && data.p0Tp <= 100000
+        && data.p1Name is string && data.p1Name.size() >= 1 && data.p1Name.size() <= 32
+        && data.p1Fighter is string && isValidFighterId(data.p1Fighter)
+        && data.p1Rp is int && data.p1Rp >= 0 && data.p1Rp <= 10000
+        && data.p1Tp is int && data.p1Tp >= 0 && data.p1Tp <= 100000
+        && isValidCycleId(data.tournamentCycleId)
+        && data.tournamentTitle is string && data.tournamentTitle.size() <= 64
+        && data.offerSdp is string && data.offerSdp.size() <= 24000
+        && data.answerSdp is string && data.answerSdp.size() <= 24000
+        && data.hostRelayJson is string && data.hostRelayJson.size() <= 65536
+        && data.guestRelayJson is string && data.guestRelayJson.size() <= 8192
+        && data.score0 is int && data.score0 >= 0 && data.score0 <= 3
+        && data.score1 is int && data.score1 >= 0 && data.score1 <= 3
+        && data.winnerSlot is int && data.winnerSlot >= -1 && data.winnerSlot <= 1
+        && data.finishReason in ['none', 'ko', 'forfeit', 'cancelled']
+        && data.matchDurationSec is int && data.matchDurationSec >= 0 && data.matchDurationSec <= 36000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMatchIce(data) {
+      return data.keys().hasAll(['senderUid', 'candidateJson', 'createdAt'])
+        && data.keys().hasOnly(['senderUid', 'candidateJson', 'createdAt'])
+        && isValidId(data.senderUid)
+        && data.senderUid == request.auth.uid
+        && data.candidateJson is string
+        && data.candidateJson.size() >= 1
+        && data.candidateJson.size() <= 2048
+        && data.createdAt is timestamp;
+    }
+
+    function isValidTournamentStanding(data, playerKey) {
+      return data.keys().hasAll([
+          'playerKey',
+          'displayName',
+          'fighterId',
+          'points',
+          'wins',
+          'losses',
+          'streak',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'playerKey',
+          'displayName',
+          'fighterId',
+          'points',
+          'wins',
+          'losses',
+          'streak',
+          'updatedAt'
+        ])
+        && isValidId(data.playerKey)
+        && data.playerKey == playerKey
+        && data.playerKey == request.auth.uid
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 32
+        && data.fighterId is string && isValidFighterId(data.fighterId)
+        && data.points is int && data.points >= 0 && data.points <= 100000
+        && data.wins is int && data.wins >= 0 && data.wins <= 1000000
+        && data.losses is int && data.losses >= 0 && data.losses <= 1000000
+        && data.streak is int && data.streak >= 0 && data.streak <= 1000000
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTournamentCycleMatch(data, cycleId, matchId) {
+      return data.keys().hasAll([
+          'matchId',
+          'cycleId',
+          'hostUid',
+          'guestUid',
+          'status',
+          'round',
+          'roundPhase',
+          'score0',
+          'score1',
+          'mapId',
+          'p0Name',
+          'p0Fighter',
+          'p0Tp',
+          'p1Name',
+          'p1Fighter',
+          'p1Tp',
+          'winnerSlot',
+          'reason',
+          'startedAtMs',
+          'finishedAtMs',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'matchId',
+          'cycleId',
+          'hostUid',
+          'guestUid',
+          'status',
+          'round',
+          'roundPhase',
+          'score0',
+          'score1',
+          'mapId',
+          'p0Name',
+          'p0Fighter',
+          'p0Tp',
+          'p1Name',
+          'p1Fighter',
+          'p1Tp',
+          'winnerSlot',
+          'reason',
+          'startedAtMs',
+          'finishedAtMs',
+          'updatedAt'
+        ])
+        && data.matchId == matchId
+        && data.cycleId == cycleId
+        && isValidCycleId(cycleId)
+        && isValidId(data.hostUid)
+        && isValidId(data.guestUid)
+        && data.hostUid != data.guestUid
+        && data.status in ['live', 'completed']
+        && data.round is int && data.round >= 1 && data.round <= 10
+        && data.roundPhase in ['intro', 'fighting', 'round_over', 'series_over', 'completed']
+        && data.score0 is int && data.score0 >= 0 && data.score0 <= 3
+        && data.score1 is int && data.score1 >= 0 && data.score1 <= 3
+        && data.mapId is string && isValidMapId(data.mapId)
+        && data.p0Name is string && data.p0Name.size() >= 1 && data.p0Name.size() <= 32
+        && data.p0Fighter is string && isValidFighterId(data.p0Fighter)
+        && data.p0Tp is int && data.p0Tp >= 0 && data.p0Tp <= 100000
+        && data.p1Name is string && data.p1Name.size() >= 1 && data.p1Name.size() <= 32
+        && data.p1Fighter is string && isValidFighterId(data.p1Fighter)
+        && data.p1Tp is int && data.p1Tp >= 0 && data.p1Tp <= 100000
+        && data.winnerSlot is int && data.winnerSlot >= -1 && data.winnerSlot <= 1
+        && data.reason in ['none', 'ko', 'forfeit']
+        && data.startedAtMs is int && data.startedAtMs >= 0 && data.startedAtMs <= 9999999999999
+        && data.finishedAtMs is int && data.finishedAtMs >= 0 && data.finishedAtMs <= 9999999999999
+        && data.updatedAt is timestamp;
+    }
+
     match /users/{userId} {
       allow get: if isValidId(userId) && isOwner(userId);
       allow list: if false;
@@ -241,7 +516,6 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          // Action: Edit profile and fighter/stage defaults
           incoming().diff(existing()).affectedKeys().hasOnly([
             'displayName',
             'favoriteFighter',
@@ -249,27 +523,19 @@ service cloud.firestore {
             'preferredMode',
             'updatedAt'
           ])
-          ||
-          // Action: Update or reset lifetime scoreboard stats
-          incoming().diff(existing()).affectedKeys().hasOnly([
+          || incoming().diff(existing()).affectedKeys().hasOnly([
             'scoreboard',
             'updatedAt'
           ])
-          ||
-          // Action: Update online casual/ranked stats and RP
-          incoming().diff(existing()).affectedKeys().hasOnly([
+          || incoming().diff(existing()).affectedKeys().hasOnly([
             'onlineStats',
             'updatedAt'
           ])
-          ||
-          // Action: Update bi-weekly tournament stats and cycle score
-          incoming().diff(existing()).affectedKeys().hasOnly([
+          || incoming().diff(existing()).affectedKeys().hasOnly([
             'tournamentStats',
             'updatedAt'
           ])
-          ||
-          // Action: Combined profile + scoreboard sync
-          incoming().diff(existing()).affectedKeys().hasOnly([
+          || incoming().diff(existing()).affectedKeys().hasOnly([
             'displayName',
             'favoriteFighter',
             'defaultMap',
@@ -304,6 +570,172 @@ service cloud.firestore {
             'isGuest',
             'updatedAt'
           ]);
+      }
+    }
+
+    match /online_presence/{userId} {
+      allow get: if isValidId(userId) && isSignedIn();
+      allow list: if isSignedIn();
+
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidOnlinePresence(incoming(), userId)
+        && incoming().heartbeatAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isValidOnlinePresence(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().heartbeatAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isValidId(userId) && isOwner(userId);
+    }
+
+    match /online_matches/{matchId} {
+      allow get: if isValidId(matchId)
+        && isSignedIn()
+        && (existing().hostUid == request.auth.uid || existing().guestUid == request.auth.uid);
+
+      allow list: if isSignedIn()
+        && (existing().hostUid == request.auth.uid || existing().guestUid == request.auth.uid);
+
+      allow delete: if false;
+
+      allow create: if isValidId(matchId)
+        && matchId.matches('^m_[a-zA-Z0-9_\\-]+$')
+        && isSignedIn()
+        && isValidOnlineMatch(incoming(), matchId)
+        && incoming().hostUid == request.auth.uid
+        && incoming().status == 'signaling'
+        && incoming().winnerSlot == -1
+        && incoming().finishReason == 'none'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(matchId)
+        && isSignedIn()
+        && isValidOnlineMatch(incoming(), matchId)
+        && incoming().matchId == existing().matchId
+        && incoming().queueType == existing().queueType
+        && incoming().hostUid == existing().hostUid
+        && incoming().guestUid == existing().guestUid
+        && incoming().mapId == existing().mapId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (
+            existing().hostUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status',
+              'offerSdp',
+              'hostRelayJson',
+              'score0',
+              'score1',
+              'winnerSlot',
+              'finishReason',
+              'matchDurationSec',
+              'updatedAt'
+            ])
+          )
+          || (
+            existing().guestUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status',
+              'answerSdp',
+              'guestRelayJson',
+              'winnerSlot',
+              'finishReason',
+              'matchDurationSec',
+              'updatedAt'
+            ])
+            && (
+              (
+                incoming().winnerSlot == existing().winnerSlot
+                && incoming().finishReason == existing().finishReason
+              )
+              || (
+                incoming().status == 'finished'
+                && incoming().finishReason == 'forfeit'
+                && incoming().winnerSlot == 0
+              )
+              || (
+                incoming().status == 'finished'
+                && incoming().finishReason == 'cancelled'
+                && incoming().winnerSlot == -1
+              )
+            )
+          )
+        );
+
+      match /ice/{iceId} {
+        allow get, list: if isValidId(matchId)
+          && isValidId(iceId)
+          && isSignedIn()
+          && exists(/databases/$(database)/documents/online_matches/$(matchId))
+          && (
+            get(/databases/$(database)/documents/online_matches/$(matchId)).data.hostUid == request.auth.uid
+            || get(/databases/$(database)/documents/online_matches/$(matchId)).data.guestUid == request.auth.uid
+          );
+
+        allow create: if isValidId(matchId)
+          && isValidId(iceId)
+          && isSignedIn()
+          && isValidMatchIce(incoming())
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/online_matches/$(matchId))
+          && (
+            get(/databases/$(database)/documents/online_matches/$(matchId)).data.hostUid == request.auth.uid
+            || get(/databases/$(database)/documents/online_matches/$(matchId)).data.guestUid == request.auth.uid
+          );
+
+        allow update, delete: if false;
+      }
+    }
+
+    match /tournament_cycles/{cycleId} {
+      allow read, write: if false;
+
+      match /standings/{playerKey} {
+        allow get, list: if isValidCycleId(cycleId) && isSignedIn();
+        allow delete: if false;
+
+        allow create: if isValidCycleId(cycleId)
+          && isValidId(playerKey)
+          && isOwner(playerKey)
+          && isValidTournamentStanding(incoming(), playerKey)
+          && incoming().updatedAt == request.time;
+
+        allow update: if isValidCycleId(cycleId)
+          && isValidId(playerKey)
+          && isOwner(playerKey)
+          && isValidTournamentStanding(incoming(), playerKey)
+          && incoming().playerKey == existing().playerKey
+          && incoming().updatedAt == request.time;
+      }
+
+      match /matches/{matchId} {
+        allow get, list: if isValidCycleId(cycleId) && isSignedIn();
+        allow delete: if false;
+
+        allow create: if isValidCycleId(cycleId)
+          && isValidId(matchId)
+          && isSignedIn()
+          && isValidTournamentCycleMatch(incoming(), cycleId, matchId)
+          && incoming().hostUid == request.auth.uid
+          && incoming().updatedAt == request.time;
+
+        allow update: if isValidCycleId(cycleId)
+          && isValidId(matchId)
+          && isSignedIn()
+          && isValidTournamentCycleMatch(incoming(), cycleId, matchId)
+          && existing().hostUid == request.auth.uid
+          && incoming().hostUid == existing().hostUid
+          && incoming().guestUid == existing().guestUid
+          && incoming().matchId == existing().matchId
+          && incoming().cycleId == existing().cycleId
+          && incoming().updatedAt == request.time;
       }
     }
   }

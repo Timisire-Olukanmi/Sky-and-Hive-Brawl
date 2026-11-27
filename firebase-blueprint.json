@@ -136,6 +136,201 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "OnlinePresence": {
+      "title": "OnlinePresence",
+      "description": "Public, non-PII live multiplayer presence, queue membership, and optional room code for global matchmaking.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "area": { "type": "string", "enum": ["none", "casual", "ranked", "tournament"] },
+        "queue": { "type": "string", "enum": ["none", "casual", "ranked", "tournament"] },
+        "status": { "type": "string", "enum": ["waiting", "queued", "in_match"] },
+        "fighterId": {
+          "type": "string",
+          "enum": ["honey_shell", "cloudier", "eve", "spidra", "marshal_bolt", "pyro_jack", "aqua_nyx", "blade_zero", "moss_golem", "astro_pip"]
+        },
+        "preferredMap": {
+          "type": "string",
+          "enum": ["hive_canopy", "storm_citadel", "magma_foundry", "wind_mill_spire", "eclipse_temple", "neon_skyline", "frost_glacier", "cyber_factory", "coral_abyss", "cosmic_station", "random"]
+        },
+        "rankedPoints": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "tournamentPoints": { "type": "integer", "minimum": 0, "maximum": 100000 },
+        "tournamentWins": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "tournamentLosses": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "tournamentStreak": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "tournamentCycleId": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "matchId": { "type": "string", "minLength": 0, "maxLength": 128 },
+        "roomCode": { "type": "string", "minLength": 0, "maxLength": 12 },
+        "queueEnteredAt": { "type": "integer", "minimum": 0 },
+        "heartbeatAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "area",
+        "queue",
+        "status",
+        "fighterId",
+        "preferredMap",
+        "rankedPoints",
+        "tournamentPoints",
+        "tournamentWins",
+        "tournamentLosses",
+        "tournamentStreak",
+        "tournamentCycleId",
+        "matchId",
+        "roomCode",
+        "queueEnteredAt",
+        "heartbeatAt",
+        "updatedAt"
+      ]
+    },
+    "OnlineMatch": {
+      "title": "OnlineMatch",
+      "description": "Global FT3 online match room with WebRTC SDP signaling and Firestore relay fallback.",
+      "type": "object",
+      "properties": {
+        "matchId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "queueType": { "type": "string", "enum": ["casual", "ranked", "tournament"] },
+        "hostUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "guestUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "mapId": {
+          "type": "string",
+          "enum": ["hive_canopy", "storm_citadel", "magma_foundry", "wind_mill_spire", "eclipse_temple", "neon_skyline", "frost_glacier", "cyber_factory", "coral_abyss", "cosmic_station"]
+        },
+        "status": { "type": "string", "enum": ["signaling", "active", "finished"] },
+        "p0Name": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "p0Fighter": { "type": "string" },
+        "p0Rp": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "p0Tp": { "type": "integer", "minimum": 0, "maximum": 100000 },
+        "p1Name": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "p1Fighter": { "type": "string" },
+        "p1Rp": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "p1Tp": { "type": "integer", "minimum": 0, "maximum": 100000 },
+        "tournamentCycleId": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "tournamentTitle": { "type": "string", "minLength": 0, "maxLength": 64 },
+        "offerSdp": { "type": "string", "minLength": 0, "maxLength": 24000 },
+        "answerSdp": { "type": "string", "minLength": 0, "maxLength": 24000 },
+        "hostRelayJson": { "type": "string", "minLength": 0, "maxLength": 65536 },
+        "guestRelayJson": { "type": "string", "minLength": 0, "maxLength": 8192 },
+        "score0": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "score1": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "winnerSlot": { "type": "integer", "minimum": -1, "maximum": 1 },
+        "finishReason": { "type": "string", "enum": ["none", "ko", "forfeit", "cancelled"] },
+        "matchDurationSec": { "type": "integer", "minimum": 0, "maximum": 36000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "matchId",
+        "queueType",
+        "hostUid",
+        "guestUid",
+        "mapId",
+        "status",
+        "p0Name",
+        "p0Fighter",
+        "p0Rp",
+        "p0Tp",
+        "p1Name",
+        "p1Fighter",
+        "p1Rp",
+        "p1Tp",
+        "tournamentCycleId",
+        "tournamentTitle",
+        "offerSdp",
+        "answerSdp",
+        "hostRelayJson",
+        "guestRelayJson",
+        "score0",
+        "score1",
+        "winnerSlot",
+        "finishReason",
+        "matchDurationSec",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "OnlineMatchIce": {
+      "title": "OnlineMatchIce",
+      "description": "WebRTC ICE candidate exchanged between two participants of an online match.",
+      "type": "object",
+      "properties": {
+        "senderUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "candidateJson": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["senderUid", "candidateJson", "createdAt"]
+    },
+    "TournamentStanding": {
+      "title": "TournamentStanding",
+      "description": "Global player standing within a bi-weekly tournament cycle.",
+      "type": "object",
+      "properties": {
+        "playerKey": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "fighterId": { "type": "string" },
+        "points": { "type": "integer", "minimum": 0, "maximum": 100000 },
+        "wins": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "losses": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "streak": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["playerKey", "displayName", "fighterId", "points", "wins", "losses", "streak", "updatedAt"]
+    },
+    "TournamentCycleMatch": {
+      "title": "TournamentCycleMatch",
+      "description": "Live or completed FT3 match record for the shared global bi-weekly tournament bracket.",
+      "type": "object",
+      "properties": {
+        "matchId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "cycleId": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "hostUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "guestUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "status": { "type": "string", "enum": ["live", "completed"] },
+        "round": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "roundPhase": { "type": "string", "enum": ["intro", "fighting", "round_over", "series_over", "completed"] },
+        "score0": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "score1": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "mapId": { "type": "string" },
+        "p0Name": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "p0Fighter": { "type": "string" },
+        "p0Tp": { "type": "integer", "minimum": 0, "maximum": 100000 },
+        "p1Name": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "p1Fighter": { "type": "string" },
+        "p1Tp": { "type": "integer", "minimum": 0, "maximum": 100000 },
+        "winnerSlot": { "type": "integer", "minimum": -1, "maximum": 1 },
+        "reason": { "type": "string", "enum": ["none", "ko", "forfeit"] },
+        "startedAtMs": { "type": "integer", "minimum": 0 },
+        "finishedAtMs": { "type": "integer", "minimum": 0 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "matchId",
+        "cycleId",
+        "hostUid",
+        "guestUid",
+        "status",
+        "round",
+        "roundPhase",
+        "score0",
+        "score1",
+        "mapId",
+        "p0Name",
+        "p0Fighter",
+        "p0Tp",
+        "p1Name",
+        "p1Fighter",
+        "p1Tp",
+        "winnerSlot",
+        "reason",
+        "startedAtMs",
+        "finishedAtMs",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -150,6 +345,36 @@
         "$ref": "#/entities/UserPrivateAccount"
       },
       "description": "Owner-only isolated PII document (docId: account) storing email and login provider metadata."
+    },
+    "/online_presence/{userId}": {
+      "schema": {
+        "$ref": "#/entities/OnlinePresence"
+      },
+      "description": "Global cloud lobby roster and matchmaking queue presence (non-PII, owner-write, signed-in read)."
+    },
+    "/online_matches/{matchId}": {
+      "schema": {
+        "$ref": "#/entities/OnlineMatch"
+      },
+      "description": "Participant-only FT3 online battle room for WebRTC signaling and cloud relay fallback."
+    },
+    "/online_matches/{matchId}/ice/{iceId}": {
+      "schema": {
+        "$ref": "#/entities/OnlineMatchIce"
+      },
+      "description": "Participant-only WebRTC ICE signaling candidates for a match."
+    },
+    "/tournament_cycles/{cycleId}/standings/{playerKey}": {
+      "schema": {
+        "$ref": "#/entities/TournamentStanding"
+      },
+      "description": "Shared global bi-weekly tournament standings per player (owner-write, signed-in read)."
+    },
+    "/tournament_cycles/{cycleId}/matches/{matchId}": {
+      "schema": {
+        "$ref": "#/entities/TournamentCycleMatch"
+      },
+      "description": "Shared global bi-weekly tournament live and completed FT3 bracket matches."
     }
   }
 }

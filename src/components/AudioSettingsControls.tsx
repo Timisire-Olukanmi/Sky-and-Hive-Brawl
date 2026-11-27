@@ -1,14 +1,17 @@
 import { useRef } from 'react';
-import { Music, Volume2, VolumeX } from 'lucide-react';
+import { Gamepad2, Music, Volume2, VolumeX } from 'lucide-react';
 import { MAP_SPECS } from '../game/constants';
 import { STAGE_MUSIC_METADATA } from '../game/music';
 import type { MapId } from '../game/types';
+import type { TouchControlsPreference } from './MobileControls';
 
 interface AudioSettingsControlsProps {
   musicVolume: number;
   sfxVolume: number;
   muted: boolean;
   activeStageId?: MapId | null;
+  touchControlsPref?: TouchControlsPreference;
+  onChangeTouchControlsPref?: (pref: TouchControlsPreference) => void;
   onChangeMusicVolume: (volume: number) => void;
   onChangeSfxVolume: (volume: number) => void;
   onPreviewSfx?: () => void;
@@ -20,6 +23,8 @@ export function AudioSettingsControls({
   sfxVolume,
   muted,
   activeStageId,
+  touchControlsPref,
+  onChangeTouchControlsPref,
   onChangeMusicVolume,
   onChangeSfxVolume,
   onPreviewSfx,
@@ -175,6 +180,31 @@ export function AudioSettingsControls({
             className="w-full h-2 accent-sky-400 cursor-pointer"
           />
         </div>
+
+        {touchControlsPref !== undefined && onChangeTouchControlsPref && (
+          <div className="pt-2.5 border-t border-white/10 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-slate-200">
+              <Gamepad2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" aria-hidden="true" />
+              <span>Touch Controls</span>
+            </div>
+            <div className="flex items-center gap-1 p-0.5 rounded-md bg-slate-900 border border-white/10">
+              {(['auto', 'on', 'off'] as const).map((opt) => (
+                <button
+                  key={opt}
+                  type="button"
+                  onClick={() => onChangeTouchControlsPref(opt)}
+                  className={`px-2 py-1 rounded text-[11px] font-semibold capitalize transition-colors cursor-pointer ${
+                    touchControlsPref === opt
+                      ? 'bg-emerald-400 text-slate-950'
+                      : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  {opt}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

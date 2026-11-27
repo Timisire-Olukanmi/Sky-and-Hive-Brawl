@@ -56,6 +56,7 @@ export interface WaitingLobbyEntry {
   tournamentPoints: number;
   status: 'waiting' | 'queued' | 'in_match';
   joinedAt: number;
+  roomCode?: string;
 }
 
 export interface WaitingAreaSnapshot {
